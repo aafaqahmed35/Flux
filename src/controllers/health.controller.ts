@@ -155,6 +155,22 @@ export const getHealth = asyncHandler(async (_req: Request, res: Response): Prom
     // Graceful fallback
   }
 
+  let schedulerMetrics = {
+    activeSchedules: 0,
+    dueSchedules: 0,
+  };
+
+  try {
+    const activeRes = await pgPool.query('SELECT COUNT(*) FROM schedules WHERE enabled = TRUE');
+    const dueRes = await pgPool.query('SELECT COUNT(*) FROM schedules WHERE enabled = TRUE AND next_run_at <= NOW()');
+    schedulerMetrics = {
+      activeSchedules: parseInt(activeRes.rows[0].count, 10),
+      dueSchedules: parseInt(dueRes.rows[0].count, 10),
+    };
+  } catch {
+    // Graceful fallback
+  }
+
   const overallStatus = dbStatus === 'UP' && redisStatus === 'UP' ? 'UP' : 'DEGRADED';
   const statusCode = overallStatus === 'UP' ? HTTP_STATUS.OK : HTTP_STATUS.SERVICE_UNAVAILABLE;
 
@@ -186,6 +202,7 @@ export const getHealth = asyncHandler(async (_req: Request, res: Response): Prom
       queue: queueMetrics,
       retry: retryMetrics,
       workers: workerMetrics,
+      scheduler: schedulerMetrics,
     },
   };
 

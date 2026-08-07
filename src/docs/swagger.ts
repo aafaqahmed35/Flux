@@ -322,6 +322,56 @@ export const openApiSpec = {
         },
       },
     },
+    '/api/v1/schedules': {
+      get: {
+        summary: 'List Recurring Schedules',
+        description: 'Retrieves a paginated list of recurring schedules with optional filters.',
+        tags: ['Schedules'],
+        responses: {
+          '200': { description: 'Schedules retrieved successfully' },
+        },
+      },
+      post: {
+        summary: 'Create Recurring Schedule',
+        description: 'Creates a new cron-based recurring schedule.',
+        tags: ['Schedules'],
+        responses: {
+          '201': { description: 'Schedule created successfully' },
+        },
+      },
+    },
+    '/api/v1/schedules/{id}': {
+      get: {
+        summary: 'Get Schedule Details',
+        tags: ['Schedules'],
+        responses: {
+          '200': { description: 'Schedule details' },
+        },
+      },
+      patch: {
+        summary: 'Update Schedule',
+        tags: ['Schedules'],
+        responses: {
+          '200': { description: 'Schedule updated' },
+        },
+      },
+      delete: {
+        summary: 'Delete Schedule',
+        tags: ['Schedules'],
+        responses: {
+          '200': { description: 'Schedule deleted' },
+        },
+      },
+    },
+    '/api/v1/schedules/{id}/run': {
+      post: {
+        summary: 'Trigger Schedule Now',
+        tags: ['Schedules'],
+        responses: {
+          '200': { description: 'Schedule triggered manually' },
+        },
+      },
+    },
   },
   components: {
     schemas: {
