@@ -1,8 +1,40 @@
 import { JobPriority, JobStatus } from '../constants/job.constants.js';
+import { RetryStrategy } from '../retry/retry.constants.js';
 
 export interface RetryConfiguration {
   maxRetries: number;
   retryDelay: number;
+  retryStrategy?: RetryStrategy;
+}
+
+export interface RetryHistoryRecord {
+  id: string;
+  jobId: string;
+  attempt: number;
+  strategy: string;
+  delayMs: number;
+  scheduledAt: Date | null;
+  startedAt: Date | null;
+  failedAt: Date | null;
+  completedAt: Date | null;
+  failureReason: string | null;
+  failureCode: string | null;
+  workerId: string | null;
+  createdAt: Date;
+}
+
+export interface CreateRetryHistoryRecordInput {
+  jobId: string;
+  attempt: number;
+  strategy: string;
+  delayMs: number;
+  scheduledAt?: Date | null;
+  startedAt?: Date | null;
+  failedAt?: Date | null;
+  completedAt?: Date | null;
+  failureReason?: string | null;
+  failureCode?: string | null;
+  workerId?: string | null;
 }
 
 export interface Job {
@@ -18,7 +50,13 @@ export interface Job {
   retryCount: number;
   maxRetries: number;
   retryDelay: number;
+  retryStrategy: RetryStrategy;
   nextRetryAt: Date | null;
+  lastRetryAt: Date | null;
+  lastFailureType: string | null;
+  lastFailureCode: string | null;
+  deadLetteredAt: Date | null;
+  deadLetterReason: string | null;
   scheduledFor: Date | null;
   delayUntil: Date | null;
   attempts: number;
@@ -45,6 +83,7 @@ export interface CreateJobRequest {
   priority?: JobPriority;
   maxRetries?: number;
   retryDelay?: number;
+  retryStrategy?: RetryStrategy;
   scheduledFor?: Date | string | null;
   delayUntil?: Date | string | null;
   idempotencyKey?: string | null;
@@ -56,11 +95,18 @@ export interface UpdateJobRequest {
   retryCount?: number;
   maxRetries?: number;
   retryDelay?: number;
+  retryStrategy?: RetryStrategy;
   nextRetryAt?: Date | null;
+  lastRetryAt?: Date | null;
+  lastFailureType?: string | null;
+  lastFailureCode?: string | null;
+  deadLetteredAt?: Date | null;
+  deadLetterReason?: string | null;
   scheduledFor?: Date | null;
   delayUntil?: Date | null;
   attempts?: number;
   version?: number;
+  expectedVersion?: number;
   lockedAt?: Date | null;
   startedAt?: Date | null;
   completedAt?: Date | null;
@@ -77,10 +123,15 @@ export interface UpdateJobRequest {
 export interface UpdateRetryInput {
   retryCount: number;
   nextRetryAt?: Date | null;
+  lastRetryAt?: Date | null;
   status?: JobStatus;
   errorMessage?: string | null;
   errorStack?: string | null;
   failureReason?: string | null;
+  lastFailureType?: string | null;
+  lastFailureCode?: string | null;
+  deadLetteredAt?: Date | null;
+  deadLetterReason?: string | null;
 }
 
 export interface UpdateExecutionMetadataInput {

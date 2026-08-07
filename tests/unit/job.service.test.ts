@@ -4,6 +4,7 @@ import { InvalidJobStateError } from '../../src/errors/InvalidJobStateError.js';
 import { JobNotFoundError } from '../../src/errors/JobNotFoundError.js';
 import { QueueService } from '../../src/queue/queue.service.js';
 import { IJobRepository } from '../../src/repositories/job.repository.interface.js';
+import { RetryStrategy } from '../../src/retry/retry.constants.js';
 import { JobService } from '../../src/services/job.service.js';
 import { Job } from '../../src/types/job.types.js';
 
@@ -25,7 +26,13 @@ describe('JobService (Unit Tests)', () => {
     retryCount: 0,
     maxRetries: 3,
     retryDelay: 1000,
+    retryStrategy: RetryStrategy.EXPONENTIAL_WITH_JITTER,
     nextRetryAt: null,
+    lastRetryAt: null,
+    lastFailureType: null,
+    lastFailureCode: null,
+    deadLetteredAt: null,
+    deadLetterReason: null,
     scheduledFor: null,
     delayUntil: null,
     attempts: 0,
@@ -62,6 +69,9 @@ describe('JobService (Unit Tests)', () => {
       count: jest.fn(),
       countByStatus: jest.fn(),
       listJobs: jest.fn(),
+      findDueRetries: jest.fn(),
+      addRetryHistoryRecord: jest.fn(),
+      getJobRetryHistory: jest.fn(),
     };
 
     mockQueueService = {

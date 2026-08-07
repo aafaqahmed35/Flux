@@ -2,9 +2,11 @@ import { JobStatus } from '../constants/job.constants.js';
 import {
   CountJobsOptions,
   CreateJobRequest,
+  CreateRetryHistoryRecordInput,
   Job,
   ListJobsOptions,
   PaginatedJobsResult,
+  RetryHistoryRecord,
   UpdateExecutionMetadataInput,
   UpdateJobRequest,
   UpdateRetryInput,
@@ -18,6 +20,7 @@ export interface IJobRepository {
   findByQueue(queueName: string, options?: Partial<ListJobsOptions>): Promise<Job[]>;
   findReadyJobs(queueName?: string, limit?: number): Promise<Job[]>;
   findScheduledJobs(beforeDate?: Date, limit?: number): Promise<Job[]>;
+  findDueRetries(limit?: number): Promise<Job[]>;
   updateStatus(
     id: string,
     newStatus: JobStatus,
@@ -25,6 +28,8 @@ export interface IJobRepository {
   ): Promise<Job>;
   updateRetry(id: string, retryData: UpdateRetryInput): Promise<Job>;
   updateExecutionMetadata(id: string, metadata: UpdateExecutionMetadataInput): Promise<Job>;
+  addRetryHistoryRecord(input: CreateRetryHistoryRecordInput): Promise<RetryHistoryRecord>;
+  getJobRetryHistory(jobId: string): Promise<RetryHistoryRecord[]>;
   cancelJob(id: string, reason?: string): Promise<Job>;
   deleteJob(id: string): Promise<boolean>;
   exists(id: string): Promise<boolean>;

@@ -30,7 +30,13 @@ describe('PostgresJobRepository (Unit Tests)', () => {
     retry_count: 0,
     max_retries: 3,
     retry_delay: 1000,
+    retry_strategy: 'EXPONENTIAL_WITH_JITTER',
     next_retry_at: null,
+    last_retry_at: null,
+    last_failure_type: null,
+    last_failure_code: null,
+    dead_lettered_at: null,
+    dead_letter_reason: null,
     scheduled_for: null,
     delay_until: null,
     attempts: 0,
@@ -45,6 +51,8 @@ describe('PostgresJobRepository (Unit Tests)', () => {
     error_message: null,
     error_stack: null,
     failure_reason: null,
+    is_deleted: false,
+    deleted_at: null,
   };
 
   it('should find a job by ID', async () => {

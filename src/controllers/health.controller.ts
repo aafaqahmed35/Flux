@@ -5,7 +5,10 @@ import { getAppliedMigrations } from '../database/migrator.js';
 import { pgPool } from '../database/postgres.js';
 import { queueService } from '../queue/queue.service.js';
 import { redisClient } from '../redis/redis.js';
+import { retryEngine } from '../retry/retry.engine.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
+import { processorRegistry } from '../workers/processor.registry.js';
+import { workerRegistry } from '../workers/worker.registry.js';
 
 const parseRedisInfo = (infoRaw: string): Record<string, string> => {
   const result: Record<string, string> = {};
@@ -87,7 +90,69 @@ export const getHealth = asyncHandler(async (_req: Request, res: Response): Prom
   try {
     queueMetrics = await queueService.getMetrics();
   } catch {
-    // Graceful fallback if queue metrics error out
+    // Graceful fallback
+  }
+
+  let retryMetrics = {
+    scheduled: 0,
+    retrying: 0,
+    deadletter: 0,
+    averageDelayMs: 0,
+  };
+
+  try {
+    const rm = await retryEngine.getMetrics();
+    retryMetrics = {
+      scheduled: rm.scheduled,
+      retrying: rm.retrying,
+      deadletter: rm.deadletter,
+      averageDelayMs: rm.averageDelayMs,
+    };
+  } catch {
+    // Graceful fallback
+  }
+
+  let workerMetrics = {
+    registered: 0,
+    active: 0,
+    busy: 0,
+    idle: 0,
+    heartbeatAgeMs: -1,
+    processorCount: processorRegistry.processorCount,
+  };
+
+  try {
+    const activeWorkers = await workerRegistry.listActiveWorkers();
+    const now = Date.now();
+    let minHeartbeatAge = Infinity;
+
+    let busyCount = 0;
+    let idleCount = 0;
+
+    activeWorkers.forEach((w) => {
+      if (w.status !== 'OFFLINE') {
+        const age = now - new Date(w.lastSeen).getTime();
+        if (age < minHeartbeatAge) {
+          minHeartbeatAge = age;
+        }
+      }
+      if (w.status === 'BUSY') {
+        busyCount++;
+      } else if (w.status === 'IDLE') {
+        idleCount++;
+      }
+    });
+
+    workerMetrics = {
+      registered: activeWorkers.length,
+      active: activeWorkers.filter((w) => w.status !== 'OFFLINE').length,
+      busy: busyCount,
+      idle: idleCount,
+      heartbeatAgeMs: minHeartbeatAge === Infinity ? -1 : minHeartbeatAge,
+      processorCount: processorRegistry.processorCount,
+    };
+  } catch {
+    // Graceful fallback
   }
 
   const overallStatus = dbStatus === 'UP' && redisStatus === 'UP' ? 'UP' : 'DEGRADED';
@@ -119,6 +184,8 @@ export const getHealth = asyncHandler(async (_req: Request, res: Response): Prom
         latest: latestMigration,
       },
       queue: queueMetrics,
+      retry: retryMetrics,
+      workers: workerMetrics,
     },
   };
 

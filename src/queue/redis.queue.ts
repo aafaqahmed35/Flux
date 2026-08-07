@@ -95,6 +95,39 @@ export class RedisQueue implements IQueueEngine {
     }
   }
 
+  async claimJob(queueName: string, timeoutSeconds = 0): Promise<string | null> {
+    await this.ensureConnected();
+
+    const sourceKey = QueueKeyFactory.queue(queueName);
+    const destKey = QueueKeyFactory.processing(queueName);
+
+    try {
+      let jobId: string | null = null;
+      if (timeoutSeconds > 0) {
+        jobId = await this.client.blmove(sourceKey, destKey, 'RIGHT', 'LEFT', timeoutSeconds);
+      } else {
+        jobId = await this.client.lmove(sourceKey, destKey, 'RIGHT', 'LEFT');
+      }
+
+      if (jobId) {
+        appLogger.info('Job Claimed from Redis', { jobId, queueName, sourceKey, destKey });
+      }
+
+      return jobId;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errorLogger.error('Job Claim Error in Redis', { queueName, error: msg });
+      return null;
+    }
+  }
+
+  async ackJob(queueName: string, jobId: string): Promise<void> {
+    await this.ensureConnected();
+    const destKey = QueueKeyFactory.processing(queueName);
+    await this.client.lrem(destKey, 0, jobId);
+    appLogger.info('Job Acknowledged & Removed from Processing', { jobId, queueName, destKey });
+  }
+
   async queueLength(queueName: string): Promise<number> {
     await this.ensureConnected();
     const queueKey = QueueKeyFactory.queue(queueName);
@@ -149,16 +182,54 @@ export class RedisQueue implements IQueueEngine {
     return this.client.smembers(setKey);
   }
 
+  async scheduleJob(jobId: string, executeAtMs: number): Promise<void> {
+    await this.ensureConnected();
+    const scheduledKey = QueueKeyFactory.scheduled();
+    await this.client.zadd(scheduledKey, executeAtMs, jobId);
+    appLogger.info('Job scheduled in Redis ZSET', { jobId, executeAtMs });
+  }
+
+  async getDueScheduledJobs(maxTimestampMs: number, limit = 100): Promise<string[]> {
+    await this.ensureConnected();
+    const scheduledKey = QueueKeyFactory.scheduled();
+    return this.client.zrangebyscore(scheduledKey, 0, maxTimestampMs, 'LIMIT', 0, limit);
+  }
+
+  async removeScheduledJob(jobId: string): Promise<boolean> {
+    await this.ensureConnected();
+    const scheduledKey = QueueKeyFactory.scheduled();
+    const count = await this.client.zrem(scheduledKey, jobId);
+    return count > 0;
+  }
+
+  async pushToDeadLetter(jobId: string): Promise<void> {
+    await this.ensureConnected();
+    const dlqKey = QueueKeyFactory.deadLetter();
+    await this.client.rpush(dlqKey, jobId);
+    appLogger.info('Job ID pushed to Redis deadletter cache', { jobId });
+  }
+
+  async removeFromDeadLetter(jobId: string): Promise<boolean> {
+    await this.ensureConnected();
+    const dlqKey = QueueKeyFactory.deadLetter();
+    const removed = await this.client.lrem(dlqKey, 0, jobId);
+    return removed > 0;
+  }
+
+  async getDeadLetterJobIds(limit = 100, offset = 0): Promise<string[]> {
+    await this.ensureConnected();
+    const dlqKey = QueueKeyFactory.deadLetter();
+    return this.client.lrange(dlqKey, offset, offset + limit - 1);
+  }
+
   async getMetrics(targetQueueName?: string): Promise<QueueMetrics> {
     await this.ensureConnected();
 
-    // 1. Pending count from PostgreSQL (canonical source of truth for PENDING)
     const pendingCount = await jobRepository.count({
       status: JobStatus.PENDING,
       queueName: targetQueueName,
     });
 
-    // 2. Queued count from Redis queue LENGTH
     let queuedCount = 0;
     if (targetQueueName) {
       queuedCount = await this.queueLength(targetQueueName);
@@ -169,14 +240,18 @@ export class RedisQueue implements IQueueEngine {
       }
     }
 
-    // 3. Placeholders for processing, scheduled, deadletter, activeWorkers
     let processingCount = 0;
     if (targetQueueName) {
       processingCount = await this.client.llen(QueueKeyFactory.processing(targetQueueName));
+    } else {
+      const activeQueues = await this.listQueues();
+      for (const q of activeQueues) {
+        processingCount += await this.client.llen(QueueKeyFactory.processing(q));
+      }
     }
 
     const scheduledCount = await this.client.zcard(QueueKeyFactory.scheduled());
-    const deadletterCount = await this.client.llen(QueueKeyFactory.deadLetter());
+    const deadletterCount = await jobRepository.count({ status: JobStatus.DEAD_LETTER });
     const activeWorkers = await this.client.hlen(QueueKeyFactory.workers());
 
     return {

@@ -1,5 +1,6 @@
 import { JobPriority, JobStatus } from '../constants/job.constants.js';
-import { Job } from '../types/job.types.js';
+import { RetryStrategy } from '../retry/retry.constants.js';
+import { Job, RetryHistoryRecord } from '../types/job.types.js';
 
 export interface CreateJobRequestDTO {
   name: string;
@@ -9,6 +10,7 @@ export interface CreateJobRequestDTO {
   priority?: JobPriority;
   maxRetries?: number;
   retryDelay?: number;
+  retryStrategy?: RetryStrategy;
   scheduledFor?: string | Date | null;
   delayUntil?: string | Date | null;
   idempotencyKey?: string | null;
@@ -27,7 +29,13 @@ export interface JobResponseDTO {
   retryCount: number;
   maxRetries: number;
   retryDelay: number;
+  retryStrategy: string;
   nextRetryAt: string | null;
+  lastRetryAt: string | null;
+  lastFailureType: string | null;
+  lastFailureCode: string | null;
+  deadLetteredAt: string | null;
+  deadLetterReason: string | null;
   scheduledFor: string | null;
   delayUntil: string | null;
   attempts: number;
@@ -44,6 +52,22 @@ export interface JobResponseDTO {
   failureReason: string | null;
   isDeleted: boolean;
   deletedAt: string | null;
+}
+
+export interface RetryHistoryRecordDTO {
+  id: string;
+  jobId: string;
+  attempt: number;
+  strategy: string;
+  delayMs: number;
+  scheduledAt: string | null;
+  startedAt: string | null;
+  failedAt: string | null;
+  completedAt: string | null;
+  failureReason: string | null;
+  failureCode: string | null;
+  workerId: string | null;
+  createdAt: string;
 }
 
 export interface CreateJobResponseDTO {
@@ -90,7 +114,13 @@ export const mapJobToDTO = (job: Job): JobResponseDTO => {
     retryCount: job.retryCount,
     maxRetries: job.maxRetries,
     retryDelay: job.retryDelay,
+    retryStrategy: job.retryStrategy || RetryStrategy.EXPONENTIAL_WITH_JITTER,
     nextRetryAt: job.nextRetryAt ? job.nextRetryAt.toISOString() : null,
+    lastRetryAt: job.lastRetryAt ? job.lastRetryAt.toISOString() : null,
+    lastFailureType: job.lastFailureType,
+    lastFailureCode: job.lastFailureCode,
+    deadLetteredAt: job.deadLetteredAt ? job.deadLetteredAt.toISOString() : null,
+    deadLetterReason: job.deadLetterReason,
     scheduledFor: job.scheduledFor ? job.scheduledFor.toISOString() : null,
     delayUntil: job.delayUntil ? job.delayUntil.toISOString() : null,
     attempts: job.attempts,
@@ -107,5 +137,23 @@ export const mapJobToDTO = (job: Job): JobResponseDTO => {
     failureReason: job.failureReason,
     isDeleted: job.isDeleted,
     deletedAt: job.deletedAt ? job.deletedAt.toISOString() : null,
+  };
+};
+
+export const mapRetryHistoryToDTO = (record: RetryHistoryRecord): RetryHistoryRecordDTO => {
+  return {
+    id: record.id,
+    jobId: record.jobId,
+    attempt: record.attempt,
+    strategy: record.strategy,
+    delayMs: record.delayMs,
+    scheduledAt: record.scheduledAt ? record.scheduledAt.toISOString() : null,
+    startedAt: record.startedAt ? record.startedAt.toISOString() : null,
+    failedAt: record.failedAt ? record.failedAt.toISOString() : null,
+    completedAt: record.completedAt ? record.completedAt.toISOString() : null,
+    failureReason: record.failureReason,
+    failureCode: record.failureCode,
+    workerId: record.workerId,
+    createdAt: record.createdAt.toISOString(),
   };
 };

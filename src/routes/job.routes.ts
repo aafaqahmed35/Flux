@@ -34,6 +34,22 @@ router.get(
   jobController.getJobById,
 );
 
+router.get(
+  '/:id/retries',
+  validateRequest({
+    params: jobIdParamSchema,
+  }),
+  jobController.getJobRetries,
+);
+
+router.post(
+  '/:id/retry',
+  validateRequest({
+    params: jobIdParamSchema,
+  }),
+  jobController.manualRetryJob,
+);
+
 router.patch(
   '/:id/cancel',
   validateRequest({

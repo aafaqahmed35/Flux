@@ -163,6 +163,8 @@ describe('PostgresJobRepository Integration Tests', () => {
       queueName: qName,
       priority: JobPriority.LOW,
     });
+    await repository.updateStatus(jobA.id, JobStatus.QUEUED);
+    await repository.updateStatus(jobB.id, JobStatus.QUEUED);
     createdJobIds.push(jobA.id, jobB.id);
 
     const ready = await repository.findReadyJobs(qName, 10);

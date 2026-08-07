@@ -7,14 +7,19 @@ import {
   JobResponseDTO,
   ListJobsResponseDTO,
   mapJobToDTO,
+  mapRetryHistoryToDTO,
+  RetryHistoryRecordDTO,
 } from '../dtos/job.dto.js';
 import { InvalidJobStateError } from '../errors/InvalidJobStateError.js';
 import { JobNotFoundError } from '../errors/JobNotFoundError.js';
 import { appLogger, errorLogger } from '../logger/logger.js';
+import { redisQueue } from '../queue/redis.queue.js';
 import { EnqueueFailedError } from '../queue/queue.errors.js';
 import { QueueService, queueService as defaultQueueService } from '../queue/queue.service.js';
 import { IJobRepository } from '../repositories/job.repository.interface.js';
 import { jobRepository } from '../repositories/job.repository.js';
+import { retryEngine } from '../retry/retry.engine.js';
+import { RetryMetricsResponse } from '../retry/retry.types.js';
 import { IJobService, ListJobsQueryOptions } from './job.service.interface.js';
 
 export class JobService implements IJobService {
@@ -208,6 +213,49 @@ export class JobService implements IJobService {
       deleted: true,
       deletedAt: new Date().toISOString(),
     };
+  }
+
+  async getJobRetries(id: string): Promise<RetryHistoryRecordDTO[]> {
+    const existing = await this.repository.findById(id);
+    if (!existing) {
+      throw new JobNotFoundError(id);
+    }
+
+    const records = await this.repository.getJobRetryHistory(id);
+    return records.map(mapRetryHistoryToDTO);
+  }
+
+  async manualRetryJob(id: string): Promise<JobResponseDTO> {
+    const existing = await this.repository.findById(id);
+    if (!existing) {
+      throw new JobNotFoundError(id);
+    }
+
+    if (existing.status !== JobStatus.FAILED && existing.status !== JobStatus.DEAD_LETTER) {
+      throw new InvalidJobStateError(
+        `Manual retry is only allowed for jobs in FAILED or DEAD_LETTER status. Current status: '${existing.status}'`,
+        { jobId: id, currentStatus: existing.status },
+      );
+    }
+
+    const updated = await this.repository.updateStatus(id, JobStatus.QUEUED, {
+      deadLetteredAt: null,
+      deadLetterReason: null,
+    });
+
+    await redisQueue.removeFromDeadLetter(id).catch(() => {});
+    await this.queueService.enqueue(existing.queueName, id);
+
+    appLogger.info('Manual retry triggered successfully for job', {
+      jobId: id,
+      previousStatus: existing.status,
+    });
+
+    return mapJobToDTO(updated);
+  }
+
+  async getRetryMetrics(): Promise<RetryMetricsResponse> {
+    return retryEngine.getMetrics();
   }
 }
 

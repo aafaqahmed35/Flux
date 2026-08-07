@@ -7,12 +7,15 @@ import { DuplicateJobError } from '../errors/DuplicateJobError.js';
 import { InvalidJobStateError } from '../errors/InvalidJobStateError.js';
 import { JobNotFoundError } from '../errors/JobNotFoundError.js';
 import { appLogger, errorLogger } from '../logger/logger.js';
+import { RetryStrategy } from '../retry/retry.constants.js';
 import {
   CountJobsOptions,
   CreateJobRequest,
+  CreateRetryHistoryRecordInput,
   Job,
   ListJobsOptions,
   PaginatedJobsResult,
+  RetryHistoryRecord,
   UpdateExecutionMetadataInput,
   UpdateJobRequest,
   UpdateRetryInput,
@@ -32,7 +35,13 @@ export interface DatabaseJobRow {
   retry_count: number;
   max_retries: number;
   retry_delay: number;
+  retry_strategy: string;
   next_retry_at: Date | null;
+  last_retry_at: Date | null;
+  last_failure_type: string | null;
+  last_failure_code: string | null;
+  dead_lettered_at: Date | null;
+  dead_letter_reason: string | null;
   scheduled_for: Date | null;
   delay_until: Date | null;
   attempts: number;
@@ -49,6 +58,22 @@ export interface DatabaseJobRow {
   failure_reason: string | null;
   is_deleted: boolean;
   deleted_at: Date | null;
+}
+
+interface DatabaseRetryHistoryRow {
+  id: string;
+  job_id: string;
+  attempt: number | string;
+  strategy: RetryStrategy;
+  delay_ms: number | string;
+  scheduled_at: Date | string | null;
+  started_at: Date | string | null;
+  failed_at: Date | string | null;
+  completed_at: Date | string | null;
+  failure_reason: string | null;
+  failure_code: string | null;
+  worker_id: string | null;
+  created_at: Date | string;
 }
 
 export class PostgresJobRepository implements IJobRepository {
@@ -72,7 +97,13 @@ export class PostgresJobRepository implements IJobRepository {
       retryCount: Number(row.retry_count),
       maxRetries: Number(row.max_retries),
       retryDelay: Number(row.retry_delay),
+      retryStrategy: (row.retry_strategy as RetryStrategy) || RetryStrategy.EXPONENTIAL_WITH_JITTER,
       nextRetryAt: row.next_retry_at ? new Date(row.next_retry_at) : null,
+      lastRetryAt: row.last_retry_at ? new Date(row.last_retry_at) : null,
+      lastFailureType: row.last_failure_type ?? null,
+      lastFailureCode: row.last_failure_code ?? null,
+      deadLetteredAt: row.dead_lettered_at ? new Date(row.dead_lettered_at) : null,
+      deadLetterReason: row.dead_letter_reason ?? null,
       scheduledFor: row.scheduled_for ? new Date(row.scheduled_for) : null,
       delayUntil: row.delay_until ? new Date(row.delay_until) : null,
       attempts: Number(row.attempts),
@@ -101,122 +132,111 @@ export class PostgresJobRepository implements IJobRepository {
         validated.idempotencyKey,
       );
       if (existing) {
-        appLogger.info('Duplicate job creation suppressed by idempotency key', {
-          queueName: validated.queueName,
-          idempotencyKey: validated.idempotencyKey,
-          existingJobId: existing.id,
-        });
-        throw new DuplicateJobError(
-          `Job with idempotency key '${validated.idempotencyKey}' already exists in queue '${validated.queueName}'`,
-          { existingJobId: existing.id },
-        );
+        throw new DuplicateJobError(validated.queueName, validated.idempotencyKey);
       }
     }
 
-    const initialStatus =
-      validated.scheduledFor || validated.delayUntil ? JobStatus.DELAYED : JobStatus.PENDING;
-
     const sql = `
       INSERT INTO jobs (
-        name,
-        queue_name,
-        idempotency_key,
-        payload,
-        metadata,
-        status,
-        priority,
-        max_retries,
-        retry_delay,
-        scheduled_for,
-        delay_until
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        name, queue_name, payload, metadata, priority, max_retries, retry_delay, retry_strategy,
+        scheduled_for, delay_until, idempotency_key, status
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'PENDING')
       RETURNING *
     `;
 
     const values = [
       validated.name,
       validated.queueName,
-      validated.idempotencyKey ?? null,
       JSON.stringify(validated.payload ?? {}),
       JSON.stringify(validated.metadata ?? {}),
-      initialStatus,
-      validated.priority ?? JobPriority.NORMAL,
-      validated.maxRetries ?? 3,
-      validated.retryDelay ?? 1000,
+      validated.priority,
+      validated.maxRetries,
+      validated.retryDelay,
+      validated.retryStrategy ?? RetryStrategy.EXPONENTIAL_WITH_JITTER,
       validated.scheduledFor ?? null,
       validated.delayUntil ?? null,
+      validated.idempotencyKey ?? null,
     ];
 
     try {
       const result = await this.pool.query<DatabaseJobRow>(sql, values);
       const row = result.rows[0];
       if (!row) {
-        throw new Error('Failed to insert job into database');
+        throw new Error('Database failed to return inserted job row');
       }
-      const job = this.mapRowToJob(row);
+      const createdJob = this.mapRowToJob(row);
 
-      appLogger.info('Job created successfully', {
-        jobId: job.id,
-        name: job.name,
-        queueName: job.queueName,
-        status: job.status,
-        priority: job.priority,
+      appLogger.info('Job created in PostgreSQL', {
+        jobId: createdJob.id,
+        name: createdJob.name,
+        queueName: createdJob.queueName,
+        status: createdJob.status,
       });
 
-      return job;
-    } catch (err: unknown) {
-      if (err instanceof pg.DatabaseError && err.code === '23505') {
+      return createdJob;
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === '23505') {
         throw new DuplicateJobError(
-          `Job with idempotency key '${validated.idempotencyKey}' already exists in queue '${validated.queueName}'`,
+          validated.queueName,
+          validated.idempotencyKey || 'concurrent_duplicate',
         );
       }
-      const msg = err instanceof Error ? err.message : String(err);
-      errorLogger.error(
-        `Failed to create job '${validated.name}' in queue '${validated.queueName}': ${msg}`,
-      );
-      throw err;
+      errorLogger.error('Failed to create job in PostgreSQL', { error, rawRequest });
+      throw error;
     }
   }
 
-  async findById(id: string, includeDeleted = false): Promise<Job | null> {
-    const sql = includeDeleted
-      ? 'SELECT * FROM jobs WHERE id = $1'
-      : 'SELECT * FROM jobs WHERE id = $1 AND is_deleted = FALSE';
+  async findById(id: string): Promise<Job | null> {
+    const sql = `SELECT * FROM jobs WHERE id = $1 AND is_deleted = FALSE`;
     const result = await this.pool.query<DatabaseJobRow>(sql, [id]);
     const row = result.rows[0];
-    return row ? this.mapRowToJob(row) : null;
+    if (!row) {
+      return null;
+    }
+    return this.mapRowToJob(row);
   }
 
   async findByIdempotencyKey(queueName: string, idempotencyKey: string): Promise<Job | null> {
-    const sql =
-      'SELECT * FROM jobs WHERE queue_name = $1 AND idempotency_key = $2 AND is_deleted = FALSE';
+    const sql = `
+      SELECT * FROM jobs 
+      WHERE queue_name = $1 AND idempotency_key = $2 AND is_deleted = FALSE
+    `;
     const result = await this.pool.query<DatabaseJobRow>(sql, [queueName, idempotencyKey]);
     const row = result.rows[0];
-    return row ? this.mapRowToJob(row) : null;
+    if (!row) {
+      return null;
+    }
+    return this.mapRowToJob(row);
   }
 
-  async findByStatus(status: JobStatus, options?: Partial<ListJobsOptions>): Promise<Job[]> {
-    const limit = options?.limit ?? DEFAULT_PAGINATION.limit;
-    const offset = options?.offset ?? DEFAULT_PAGINATION.offset;
-    const sql =
-      'SELECT * FROM jobs WHERE status = $1 AND is_deleted = FALSE ORDER BY created_at DESC LIMIT $2 OFFSET $3';
-    const result = await this.pool.query<DatabaseJobRow>(sql, [status, limit, offset]);
+  async findByStatus(status: JobStatus, options: Partial<ListJobsOptions> = {}): Promise<Job[]> {
+    const limit = options.limit ?? DEFAULT_PAGINATION.limit;
+    const offset = options.offset ?? DEFAULT_PAGINATION.offset;
+
+    let sql = `SELECT * FROM jobs WHERE status = $1 AND is_deleted = FALSE`;
+    const values: unknown[] = [status];
+
+    if (options.queueName) {
+      values.push(options.queueName);
+      sql += ` AND queue_name = $${values.length}`;
+    }
+
+    values.push(limit, offset);
+    sql += ` ORDER BY created_at DESC LIMIT $${values.length - 1} OFFSET $${values.length}`;
+
+    const result = await this.pool.query<DatabaseJobRow>(sql, values);
     return result.rows.map((row) => this.mapRowToJob(row));
   }
 
-  async findByQueue(queueName: string, options?: Partial<ListJobsOptions>): Promise<Job[]> {
-    const limit = options?.limit ?? DEFAULT_PAGINATION.limit;
-    const offset = options?.offset ?? DEFAULT_PAGINATION.offset;
-    const sql =
-      'SELECT * FROM jobs WHERE queue_name = $1 AND is_deleted = FALSE ORDER BY created_at DESC LIMIT $2 OFFSET $3';
-    const result = await this.pool.query<DatabaseJobRow>(sql, [queueName, limit, offset]);
-    return result.rows.map((row) => this.mapRowToJob(row));
+  async findByQueue(queueName: string, options: Partial<ListJobsOptions> = {}): Promise<Job[]> {
+    return this.findByStatus(options.status ?? JobStatus.QUEUED, { ...options, queueName });
   }
 
   async findReadyJobs(queueName?: string, limit = 10): Promise<Job[]> {
     let sql = `
-      SELECT * FROM jobs
-      WHERE status IN ('PENDING', 'QUEUED')
+      SELECT * FROM jobs 
+      WHERE status = 'QUEUED'
         AND is_deleted = FALSE
         AND (scheduled_for IS NULL OR scheduled_for <= NOW())
         AND (delay_until IS NULL OR delay_until <= NOW())
@@ -228,20 +248,15 @@ export class PostgresJobRepository implements IJobRepository {
       sql += ` AND queue_name = $${values.length}`;
     }
 
-    sql += `
-      ORDER BY
-        CASE priority
-          WHEN 'CRITICAL' THEN 1
-          WHEN 'HIGH' THEN 2
-          WHEN 'NORMAL' THEN 3
-          WHEN 'LOW' THEN 4
-          ELSE 5
-        END ASC,
-        created_at ASC
-    `;
-
     values.push(limit);
-    sql += ` LIMIT $${values.length}`;
+    sql += ` ORDER BY 
+      CASE priority
+        WHEN 'CRITICAL' THEN 1
+        WHEN 'HIGH' THEN 2
+        WHEN 'NORMAL' THEN 3
+        WHEN 'LOW' THEN 4
+        ELSE 5
+      END ASC, created_at ASC LIMIT $${values.length}`;
 
     const result = await this.pool.query<DatabaseJobRow>(sql, values);
     return result.rows.map((row) => this.mapRowToJob(row));
@@ -260,6 +275,20 @@ export class PostgresJobRepository implements IJobRepository {
       LIMIT $2
     `;
     const result = await this.pool.query<DatabaseJobRow>(sql, [beforeDate, limit]);
+    return result.rows.map((row) => this.mapRowToJob(row));
+  }
+
+  async findDueRetries(limit = 100): Promise<Job[]> {
+    const sql = `
+      SELECT * FROM jobs
+      WHERE status = 'RETRYING'
+        AND is_deleted = FALSE
+        AND next_retry_at IS NOT NULL
+        AND next_retry_at <= NOW()
+      ORDER BY next_retry_at ASC
+      LIMIT $1
+    `;
+    const result = await this.pool.query<DatabaseJobRow>(sql, [limit]);
     return result.rows.map((row) => this.mapRowToJob(row));
   }
 
@@ -302,6 +331,12 @@ export class PostgresJobRepository implements IJobRepository {
       addClause('failed_at', additionalData.failedAt);
     }
 
+    if (newStatus === JobStatus.DEAD_LETTER && !additionalData?.deadLetteredAt) {
+      addClause('dead_lettered_at', now);
+    } else if (additionalData?.deadLetteredAt !== undefined) {
+      addClause('dead_lettered_at', additionalData.deadLetteredAt);
+    }
+
     if (additionalData?.workerId !== undefined) {
       addClause('worker_id', additionalData.workerId);
     }
@@ -320,26 +355,45 @@ export class PostgresJobRepository implements IJobRepository {
     if (additionalData?.failureReason !== undefined) {
       addClause('failure_reason', additionalData.failureReason);
     }
+    if (additionalData?.deadLetterReason !== undefined) {
+      addClause('dead_letter_reason', additionalData.deadLetterReason);
+    }
+    if (additionalData?.lastFailureType !== undefined) {
+      addClause('last_failure_type', additionalData.lastFailureType);
+    }
+    if (additionalData?.lastFailureCode !== undefined) {
+      addClause('last_failure_code', additionalData.lastFailureCode);
+    }
 
     values.push(id);
     const idParamIndex = values.length;
-    values.push(existing.version);
-    const versionParamIndex = values.length;
 
-    const sql = `
-      UPDATE jobs
-      SET ${setClauses.join(', ')}
-      WHERE id = $${idParamIndex} AND version = $${versionParamIndex} AND is_deleted = FALSE
-      RETURNING *
-    `;
+    let sql = '';
+    if (additionalData?.expectedVersion !== undefined) {
+      values.push(additionalData.expectedVersion);
+      const versionParamIndex = values.length;
+      sql = `
+        UPDATE jobs
+        SET ${setClauses.join(', ')}
+        WHERE id = $${idParamIndex} AND version = $${versionParamIndex} AND is_deleted = FALSE
+        RETURNING *
+      `;
+    } else {
+      sql = `
+        UPDATE jobs
+        SET ${setClauses.join(', ')}
+        WHERE id = $${idParamIndex} AND is_deleted = FALSE
+        RETURNING *
+      `;
+    }
 
     const result = await this.pool.query<DatabaseJobRow>(sql, values);
     const row = result.rows[0];
 
     if (!row) {
       throw new InvalidJobStateError(
-        `Failed to update status for job '${id}'. Optimistic locking collision or concurrent modification detected.`,
-        { jobId: id, expectedVersion: existing.version },
+        `Failed to update status for job '${id}'. Optimistic locking collision or job not found.`,
+        { jobId: id, expectedVersion: additionalData?.expectedVersion ?? existing.version },
       );
     }
 
@@ -378,6 +432,9 @@ export class PostgresJobRepository implements IJobRepository {
       setClauses.push(`${column} = $${values.length}`);
     };
 
+    if (retryData.lastRetryAt !== undefined) {
+      addClause('last_retry_at', retryData.lastRetryAt);
+    }
     if (retryData.errorMessage !== undefined) {
       addClause('error_message', retryData.errorMessage);
     }
@@ -386,6 +443,18 @@ export class PostgresJobRepository implements IJobRepository {
     }
     if (retryData.failureReason !== undefined) {
       addClause('failure_reason', retryData.failureReason);
+    }
+    if (retryData.lastFailureType !== undefined) {
+      addClause('last_failure_type', retryData.lastFailureType);
+    }
+    if (retryData.lastFailureCode !== undefined) {
+      addClause('last_failure_code', retryData.lastFailureCode);
+    }
+    if (retryData.deadLetteredAt !== undefined) {
+      addClause('dead_lettered_at', retryData.deadLetteredAt);
+    }
+    if (retryData.deadLetterReason !== undefined) {
+      addClause('dead_letter_reason', retryData.deadLetterReason);
     }
 
     values.push(id);
@@ -487,32 +556,100 @@ export class PostgresJobRepository implements IJobRepository {
 
     if (!row) {
       throw new InvalidJobStateError(
-        `Failed to update execution metadata for job '${id}'. Optimistic locking collision detected.`,
+        `Failed to update execution metadata for job '${id}'. Concurrent modification detected.`,
         { jobId: id, expectedVersion: existing.version },
       );
     }
 
-    const updated = this.mapRowToJob(row);
-
-    appLogger.info('Job execution metadata updated', {
-      jobId: id,
-      attempts: updated.attempts,
-      workerId: updated.workerId,
-    });
-
-    return updated;
+    return this.mapRowToJob(row);
   }
 
-  async cancelJob(id: string, reason = 'Job cancelled by request'): Promise<Job> {
+  async addRetryHistoryRecord(input: CreateRetryHistoryRecordInput): Promise<RetryHistoryRecord> {
+    const sql = `
+      INSERT INTO job_retry_history (
+        job_id, attempt, strategy, delay_ms, scheduled_at, started_at, failed_at, completed_at,
+        failure_reason, failure_code, worker_id
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      RETURNING *
+    `;
+    const values = [
+      input.jobId,
+      input.attempt,
+      input.strategy,
+      input.delayMs,
+      input.scheduledAt ?? null,
+      input.startedAt ?? null,
+      input.failedAt ?? null,
+      input.completedAt ?? null,
+      input.failureReason ?? null,
+      input.failureCode ?? null,
+      input.workerId ?? null,
+    ];
+    const result = await this.pool.query<DatabaseRetryHistoryRow>(sql, values);
+    const row = result.rows[0];
+    if (!row) {
+      throw new Error('Failed to insert retry history record');
+    }
+    return {
+      id: row.id,
+      jobId: row.job_id,
+      attempt: Number(row.attempt),
+      strategy: row.strategy,
+      delayMs: Number(row.delay_ms),
+      scheduledAt: row.scheduled_at ? new Date(row.scheduled_at) : null,
+      startedAt: row.started_at ? new Date(row.started_at) : null,
+      failedAt: row.failed_at ? new Date(row.failed_at) : null,
+      completedAt: row.completed_at ? new Date(row.completed_at) : null,
+      failureReason: row.failure_reason,
+      failureCode: row.failure_code,
+      workerId: row.worker_id,
+      createdAt: new Date(row.created_at),
+    };
+  }
+
+  async getJobRetryHistory(jobId: string): Promise<RetryHistoryRecord[]> {
+    const sql = `
+      SELECT * FROM job_retry_history
+      WHERE job_id = $1
+      ORDER BY attempt ASC
+    `;
+
+    const result = await this.pool.query<DatabaseRetryHistoryRow>(sql, [jobId]);
+    return result.rows.map((row) => ({
+      id: row.id,
+      jobId: row.job_id,
+      attempt: Number(row.attempt),
+      strategy: row.strategy,
+      delayMs: Number(row.delay_ms),
+      scheduledAt: row.scheduled_at ? new Date(row.scheduled_at) : null,
+      startedAt: row.started_at ? new Date(row.started_at) : null,
+      failedAt: row.failed_at ? new Date(row.failed_at) : null,
+      completedAt: row.completed_at ? new Date(row.completed_at) : null,
+      failureReason: row.failure_reason,
+      failureCode: row.failure_code,
+      workerId: row.worker_id,
+      createdAt: new Date(row.created_at),
+    }));
+  }
+
+  async cancelJob(id: string, reason = 'Cancelled by user'): Promise<Job> {
     return this.updateStatus(id, JobStatus.CANCELLED, {
       failureReason: reason,
-      failedAt: new Date(),
     });
   }
 
   async deleteJob(id: string): Promise<boolean> {
-    const sql =
-      'UPDATE jobs SET is_deleted = TRUE, deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND is_deleted = FALSE';
+    const existing = await this.findById(id);
+    if (!existing) {
+      return false;
+    }
+
+    const sql = `
+      UPDATE jobs
+      SET is_deleted = TRUE, deleted_at = NOW(), version = version + 1, updated_at = NOW()
+      WHERE id = $1 AND is_deleted = FALSE
+    `;
     const result = await this.pool.query(sql, [id]);
     const deleted = (result.rowCount ?? 0) > 0;
     if (deleted) {
@@ -522,58 +659,59 @@ export class PostgresJobRepository implements IJobRepository {
   }
 
   async exists(id: string): Promise<boolean> {
-    const sql = 'SELECT 1 FROM jobs WHERE id = $1 AND is_deleted = FALSE';
+    const sql = `SELECT 1 FROM jobs WHERE id = $1 AND is_deleted = FALSE`;
     const result = await this.pool.query(sql, [id]);
-    return (result.rowCount ?? 0) > 0;
+    return result.rows.length > 0;
   }
 
-  async count(options?: CountJobsOptions): Promise<number> {
-    let sql = 'SELECT COUNT(*)::int AS total FROM jobs WHERE 1=1';
+  async count(options: CountJobsOptions = {}): Promise<number> {
+    let sql = `SELECT COUNT(*) AS total FROM jobs WHERE is_deleted = FALSE`;
     const values: unknown[] = [];
 
-    if (!options?.includeDeleted) {
-      sql += ' AND is_deleted = FALSE';
-    }
-
-    if (options?.queueName) {
+    if (options.queueName) {
       values.push(options.queueName);
       sql += ` AND queue_name = $${values.length}`;
     }
-    if (options?.status) {
+    if (options.status) {
       values.push(options.status);
       sql += ` AND status = $${values.length}`;
     }
-    if (options?.priority) {
+    if (options.priority) {
       values.push(options.priority);
       sql += ` AND priority = $${values.length}`;
     }
-    if (options?.workerId) {
+    if (options.workerId) {
       values.push(options.workerId);
       sql += ` AND worker_id = $${values.length}`;
     }
-    if (options?.createdAfter) {
+    if (options.createdAfter) {
       values.push(options.createdAfter);
       sql += ` AND created_at >= $${values.length}`;
     }
-    if (options?.createdBefore) {
+    if (options.createdBefore) {
       values.push(options.createdBefore);
       sql += ` AND created_at <= $${values.length}`;
     }
-    if (options?.scheduledAfter) {
+    if (options.scheduledAfter) {
       values.push(options.scheduledAfter);
       sql += ` AND scheduled_for >= $${values.length}`;
     }
-    if (options?.scheduledBefore) {
+    if (options.scheduledBefore) {
       values.push(options.scheduledBefore);
       sql += ` AND scheduled_for <= $${values.length}`;
     }
 
-    const result = await this.pool.query<{ total: number }>(sql, values);
-    return Number(result.rows[0]?.total ?? 0);
+    const result = await this.pool.query<{ total: string }>(sql, values);
+    const firstRow = result.rows[0];
+    return firstRow ? parseInt(firstRow.total, 10) : 0;
   }
 
   async countByStatus(queueName?: string): Promise<Record<JobStatus, number>> {
-    let sql = 'SELECT status, COUNT(*)::int AS count FROM jobs WHERE is_deleted = FALSE';
+    let sql = `
+      SELECT status, COUNT(*) AS count 
+      FROM jobs 
+      WHERE is_deleted = FALSE
+    `;
     const values: unknown[] = [];
 
     if (queueName) {
@@ -581,97 +719,101 @@ export class PostgresJobRepository implements IJobRepository {
       sql += ` AND queue_name = $1`;
     }
 
-    sql += ' GROUP BY status';
+    sql += ` GROUP BY status`;
 
-    const result = await this.pool.query<{ status: string; count: number }>(sql, values);
+    const result = await this.pool.query<{ status: string; count: string }>(sql, values);
+
     const counts: Record<JobStatus, number> = {
       [JobStatus.PENDING]: 0,
       [JobStatus.QUEUED]: 0,
+      [JobStatus.CLAIMED]: 0,
       [JobStatus.RUNNING]: 0,
       [JobStatus.COMPLETED]: 0,
       [JobStatus.FAILED]: 0,
       [JobStatus.RETRYING]: 0,
       [JobStatus.CANCELLED]: 0,
       [JobStatus.DELAYED]: 0,
+      [JobStatus.DEAD_LETTER]: 0,
     };
 
     result.rows.forEach((row) => {
       if (row.status in counts) {
-        counts[row.status as JobStatus] = Number(row.count);
+        counts[row.status as JobStatus] = parseInt(row.count, 10);
       }
     });
 
     return counts;
   }
 
-  async listJobs(options?: ListJobsOptions): Promise<PaginatedJobsResult> {
-    const limit = Math.min(options?.limit ?? DEFAULT_PAGINATION.limit, DEFAULT_PAGINATION.maxLimit);
-    const offset = options?.offset ?? DEFAULT_PAGINATION.offset;
-    const orderBy = options?.orderBy ?? 'createdAt';
-    const orderDirection = options?.orderDirection ?? 'DESC';
+  async listJobs(options: ListJobsOptions = {}): Promise<PaginatedJobsResult> {
+    const limit = Math.min(options.limit ?? DEFAULT_PAGINATION.limit, DEFAULT_PAGINATION.maxLimit);
+    const offset = options.offset ?? DEFAULT_PAGINATION.offset;
+    const orderBy = options.orderBy ?? 'createdAt';
+    const orderDirection = options.orderDirection ?? 'DESC';
 
-    const columnMap: Record<string, string> = {
+    const colMap: Record<string, string> = {
       createdAt: 'created_at',
       priority: 'priority',
       status: 'status',
       scheduledFor: 'scheduled_for',
     };
+    const dbOrderCol = colMap[orderBy] || 'created_at';
 
-    const sortColumn = columnMap[orderBy] ?? 'created_at';
-
-    let whereSql = 'WHERE 1=1';
+    const whereConditions: string[] = [];
     const values: unknown[] = [];
 
-    if (!options?.includeDeleted) {
-      whereSql += ' AND is_deleted = FALSE';
+    if (!options.includeDeleted) {
+      whereConditions.push('is_deleted = FALSE');
     }
-
-    if (options?.queueName) {
+    if (options.queueName) {
       values.push(options.queueName);
-      whereSql += ` AND queue_name = $${values.length}`;
+      whereConditions.push(`queue_name = $${values.length}`);
     }
-    if (options?.status) {
+    if (options.status) {
       values.push(options.status);
-      whereSql += ` AND status = $${values.length}`;
+      whereConditions.push(`status = $${values.length}`);
     }
-    if (options?.priority) {
+    if (options.priority) {
       values.push(options.priority);
-      whereSql += ` AND priority = $${values.length}`;
+      whereConditions.push(`priority = $${values.length}`);
     }
-    if (options?.workerId) {
+    if (options.workerId) {
       values.push(options.workerId);
-      whereSql += ` AND worker_id = $${values.length}`;
+      whereConditions.push(`worker_id = $${values.length}`);
     }
-    if (options?.createdAfter) {
+    if (options.createdAfter) {
       values.push(options.createdAfter);
-      whereSql += ` AND created_at >= $${values.length}`;
+      whereConditions.push(`created_at >= $${values.length}`);
     }
-    if (options?.createdBefore) {
+    if (options.createdBefore) {
       values.push(options.createdBefore);
-      whereSql += ` AND created_at <= $${values.length}`;
+      whereConditions.push(`created_at <= $${values.length}`);
     }
-    if (options?.scheduledAfter) {
+    if (options.scheduledAfter) {
       values.push(options.scheduledAfter);
-      whereSql += ` AND scheduled_for >= $${values.length}`;
+      whereConditions.push(`scheduled_for >= $${values.length}`);
     }
-    if (options?.scheduledBefore) {
+    if (options.scheduledBefore) {
       values.push(options.scheduledBefore);
-      whereSql += ` AND scheduled_for <= $${values.length}`;
+      whereConditions.push(`scheduled_for <= $${values.length}`);
     }
 
-    const countSql = `SELECT COUNT(*)::int AS total FROM jobs ${whereSql}`;
-    const countResult = await this.pool.query<{ total: number }>(countSql, values);
-    const total = Number(countResult.rows[0]?.total ?? 0);
+    const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
-    const queryValues = [...values, limit, offset];
+    const countSql = `SELECT COUNT(*) AS total FROM jobs ${whereClause}`;
+    const countResult = await this.pool.query<{ total: string }>(countSql, values);
+    const countRow = countResult.rows[0];
+    const total = countRow ? parseInt(countRow.total, 10) : 0;
+
+    values.push(limit, offset);
     const dataSql = `
-      SELECT * FROM jobs
-      ${whereSql}
-      ORDER BY ${sortColumn} ${orderDirection}
-      LIMIT $${values.length + 1} OFFSET $${values.length + 2}
+      SELECT * FROM jobs 
+      ${whereClause} 
+      ORDER BY ${dbOrderCol} ${orderDirection} 
+      LIMIT $${values.length - 1} OFFSET $${values.length}
     `;
 
-    const dataResult = await this.pool.query<DatabaseJobRow>(dataSql, queryValues);
+    const dataResult = await this.pool.query<DatabaseJobRow>(dataSql, values);
     const jobs = dataResult.rows.map((row) => this.mapRowToJob(row));
 
     return {

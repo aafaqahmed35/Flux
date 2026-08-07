@@ -54,6 +54,18 @@ export class JobController {
     const result = await this.service.deleteJob(id);
     sendSuccess(res, result, HTTP_STATUS.OK);
   });
+
+  getJobRetries = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const id = req.params['id'] as string;
+    const history = await this.service.getJobRetries(id);
+    sendSuccess(res, history, HTTP_STATUS.OK);
+  });
+
+  manualRetryJob = asyncHandler(async (req: Request, res: Response): Promise<void> => {
+    const id = req.params['id'] as string;
+    const job = await this.service.manualRetryJob(id);
+    sendSuccess(res, job, HTTP_STATUS.OK);
+  });
 }
 
 export const jobController = new JobController();

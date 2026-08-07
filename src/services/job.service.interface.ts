@@ -6,7 +6,9 @@ import {
   DeleteJobResponseDTO,
   JobResponseDTO,
   ListJobsResponseDTO,
+  RetryHistoryRecordDTO,
 } from '../dtos/job.dto.js';
+import { RetryMetricsResponse } from '../retry/retry.types.js';
 
 export interface ListJobsQueryOptions {
   page?: number;
@@ -29,4 +31,7 @@ export interface IJobService {
   listJobs(options: ListJobsQueryOptions): Promise<ListJobsResponseDTO>;
   cancelJob(id: string, reason?: string): Promise<CancelJobResponseDTO>;
   deleteJob(id: string): Promise<DeleteJobResponseDTO>;
+  getJobRetries(id: string): Promise<RetryHistoryRecordDTO[]>;
+  manualRetryJob(id: string): Promise<JobResponseDTO>;
+  getRetryMetrics(): Promise<RetryMetricsResponse>;
 }

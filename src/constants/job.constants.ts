@@ -1,12 +1,14 @@
 export enum JobStatus {
   PENDING = 'PENDING',
   QUEUED = 'QUEUED',
+  CLAIMED = 'CLAIMED',
   RUNNING = 'RUNNING',
   COMPLETED = 'COMPLETED',
   FAILED = 'FAILED',
   RETRYING = 'RETRYING',
   CANCELLED = 'CANCELLED',
   DELAYED = 'DELAYED',
+  DEAD_LETTER = 'DEAD_LETTER',
 }
 
 export enum JobPriority {
@@ -20,18 +22,43 @@ export const JOB_STATUS_LIST = Object.values(JobStatus);
 export const JOB_PRIORITY_LIST = Object.values(JobPriority);
 
 export const ALLOWED_STATUS_TRANSITIONS: Record<JobStatus, readonly JobStatus[]> = {
-  [JobStatus.PENDING]: [JobStatus.QUEUED, JobStatus.DELAYED, JobStatus.CANCELLED],
-  [JobStatus.QUEUED]: [JobStatus.RUNNING, JobStatus.CANCELLED],
+  [JobStatus.PENDING]: [
+    JobStatus.QUEUED,
+    JobStatus.CLAIMED,
+    JobStatus.DELAYED,
+    JobStatus.CANCELLED,
+  ],
+  [JobStatus.QUEUED]: [
+    JobStatus.CLAIMED,
+    JobStatus.RUNNING,
+    JobStatus.CANCELLED,
+    JobStatus.DEAD_LETTER,
+  ],
+  [JobStatus.CLAIMED]: [
+    JobStatus.RUNNING,
+    JobStatus.FAILED,
+    JobStatus.CANCELLED,
+    JobStatus.DEAD_LETTER,
+  ],
   [JobStatus.DELAYED]: [JobStatus.QUEUED, JobStatus.CANCELLED],
   [JobStatus.RUNNING]: [
     JobStatus.COMPLETED,
     JobStatus.FAILED,
     JobStatus.RETRYING,
     JobStatus.CANCELLED,
+    JobStatus.DEAD_LETTER,
   ],
-  [JobStatus.RETRYING]: [JobStatus.QUEUED, JobStatus.FAILED, JobStatus.CANCELLED],
-  [JobStatus.FAILED]: [JobStatus.QUEUED, JobStatus.RETRYING],
+  [JobStatus.RETRYING]: [
+    JobStatus.QUEUED,
+    JobStatus.CLAIMED,
+    JobStatus.RUNNING,
+    JobStatus.FAILED,
+    JobStatus.CANCELLED,
+    JobStatus.DEAD_LETTER,
+  ],
+  [JobStatus.FAILED]: [JobStatus.QUEUED, JobStatus.RETRYING, JobStatus.DEAD_LETTER],
   [JobStatus.CANCELLED]: [JobStatus.PENDING, JobStatus.QUEUED],
+  [JobStatus.DEAD_LETTER]: [JobStatus.QUEUED, JobStatus.RETRYING, JobStatus.PENDING],
   [JobStatus.COMPLETED]: [],
 };
 
