@@ -18,13 +18,15 @@ export const openApiSpec = {
       description: 'Local Development Server',
     },
   ],
+  security: [{ bearerAuth: [] }, { apiKeyAuth: [] }],
   paths: {
     '/health': {
       get: {
         summary: 'System Health Check',
         description:
-          'Returns enriched live health metrics for the Flux application, PostgreSQL database, Redis instance, and applied migration version.',
+          'Returns enriched live health metrics for the Flux application, PostgreSQL database, Redis instance, applied migrations, and security settings.',
         tags: ['Health'],
+        security: [],
         responses: {
           '200': {
             description: 'System is fully operational (UP)',
@@ -42,6 +44,34 @@ export const openApiSpec = {
               },
             },
           },
+        },
+      },
+    },
+    '/api/v1/auth/login': {
+      post: {
+        summary: 'User Login',
+        description: 'Authenticates user credentials and returns a JWT access token.',
+        tags: ['Authentication'],
+        security: [],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['email', 'password'],
+                properties: {
+                  email: { type: 'string', example: 'operator@flux.internal' },
+                  password: { type: 'string', example: 'Password123!' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '200': { description: 'Login successful' },
+          '401': { description: 'Invalid credentials' },
+          '429': { description: 'Rate limit exceeded' },
         },
       },
     },
@@ -109,271 +139,37 @@ export const openApiSpec = {
               },
             },
           },
+          '401': { description: 'Unauthorized' },
+          '403': { description: 'Forbidden' },
+          '429': { description: 'Too Many Requests' },
         },
       },
       get: {
         summary: 'List Background Jobs',
-        description:
-          'Retrieves a paginated list of background jobs with optional multi-field filtering and sorting.',
         tags: ['Jobs'],
-        parameters: [
-          {
-            in: 'query',
-            name: 'page',
-            schema: { type: 'integer', default: 1 },
-            description: 'Page number (minimum 1)',
-          },
-          {
-            in: 'query',
-            name: 'limit',
-            schema: { type: 'integer', default: 20, maximum: 100 },
-            description: 'Number of items per page (maximum 100)',
-          },
-          {
-            in: 'query',
-            name: 'status',
-            schema: { $ref: '#/components/schemas/JobStatus' },
-            description: 'Filter by job execution status',
-          },
-          {
-            in: 'query',
-            name: 'priority',
-            schema: { $ref: '#/components/schemas/JobPriority' },
-            description: 'Filter by job priority',
-          },
-          {
-            in: 'query',
-            name: 'queue',
-            schema: { type: 'string' },
-            description: 'Filter by queue name',
-          },
-          {
-            in: 'query',
-            name: 'workerId',
-            schema: { type: 'string' },
-            description: 'Filter by assigned worker process ID',
-          },
-          {
-            in: 'query',
-            name: 'sortBy',
-            schema: {
-              type: 'string',
-              enum: ['createdAt', 'priority', 'status', 'scheduledFor'],
-              default: 'createdAt',
-            },
-            description: 'Sort field',
-          },
-          {
-            in: 'query',
-            name: 'sortOrder',
-            schema: { type: 'string', enum: ['asc', 'desc'], default: 'desc' },
-            description: 'Sort direction',
-          },
-        ],
         responses: {
-          '200': {
-            description: 'Paginated job listing',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/ListJobsResponseWrapper' },
-              },
-            },
-          },
-          '400': {
-            description: 'Invalid query filter or sort parameter',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/ErrorResponse' },
-              },
-            },
-          },
-        },
-      },
-    },
-    '/api/v1/jobs/{id}': {
-      get: {
-        summary: 'Retrieve Job Details',
-        description: 'Retrieves complete state details for a specific background job by UUID.',
-        tags: ['Jobs'],
-        parameters: [
-          {
-            in: 'path',
-            name: 'id',
-            required: true,
-            schema: { type: 'string', format: 'uuid' },
-            description: 'Unique job UUID',
-          },
-        ],
-        responses: {
-          '200': {
-            description: 'Job details retrieved successfully',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/JobResponseWrapper' },
-              },
-            },
-          },
-          '404': {
-            description: 'Job not found',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/ErrorResponse' },
-              },
-            },
-          },
-        },
-      },
-      delete: {
-        summary: 'Soft Delete Job',
-        description:
-          'Soft-deletes a job from Flux storage. Jobs in RUNNING or QUEUED state must be cancelled prior to deletion.',
-        tags: ['Jobs'],
-        parameters: [
-          {
-            in: 'path',
-            name: 'id',
-            required: true,
-            schema: { type: 'string', format: 'uuid' },
-            description: 'Unique job UUID',
-          },
-        ],
-        responses: {
-          '200': {
-            description: 'Job soft-deleted successfully',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/DeleteJobResponseWrapper' },
-              },
-            },
-          },
-          '400': {
-            description: 'Invalid state for deletion (e.g. attempting to delete RUNNING job)',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/ErrorResponse' },
-              },
-            },
-          },
-          '404': {
-            description: 'Job not found',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/ErrorResponse' },
-              },
-            },
-          },
-        },
-      },
-    },
-    '/api/v1/jobs/{id}/cancel': {
-      patch: {
-        summary: 'Cancel Job',
-        description:
-          'Cancels a pending, queued, or running background job with an optional cancellation reason.',
-        tags: ['Jobs'],
-        parameters: [
-          {
-            in: 'path',
-            name: 'id',
-            required: true,
-            schema: { type: 'string', format: 'uuid' },
-            description: 'Unique job UUID',
-          },
-        ],
-        requestBody: {
-          required: false,
-          content: {
-            'application/json': {
-              schema: {
-                type: 'object',
-                properties: {
-                  reason: { type: 'string', example: 'User requested task cancellation' },
-                },
-              },
-            },
-          },
-        },
-        responses: {
-          '200': {
-            description: 'Job cancelled successfully',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/JobResponseWrapper' },
-              },
-            },
-          },
-          '400': {
-            description:
-              'Illegal status transition (e.g. attempting to cancel an already completed job)',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/ErrorResponse' },
-              },
-            },
-          },
-          '404': {
-            description: 'Job not found',
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/ErrorResponse' },
-              },
-            },
-          },
-        },
-      },
-    },
-    '/api/v1/schedules': {
-      get: {
-        summary: 'List Recurring Schedules',
-        description: 'Retrieves a paginated list of recurring schedules with optional filters.',
-        tags: ['Schedules'],
-        responses: {
-          '200': { description: 'Schedules retrieved successfully' },
-        },
-      },
-      post: {
-        summary: 'Create Recurring Schedule',
-        description: 'Creates a new cron-based recurring schedule.',
-        tags: ['Schedules'],
-        responses: {
-          '201': { description: 'Schedule created successfully' },
-        },
-      },
-    },
-    '/api/v1/schedules/{id}': {
-      get: {
-        summary: 'Get Schedule Details',
-        tags: ['Schedules'],
-        responses: {
-          '200': { description: 'Schedule details' },
-        },
-      },
-      patch: {
-        summary: 'Update Schedule',
-        tags: ['Schedules'],
-        responses: {
-          '200': { description: 'Schedule updated' },
-        },
-      },
-      delete: {
-        summary: 'Delete Schedule',
-        tags: ['Schedules'],
-        responses: {
-          '200': { description: 'Schedule deleted' },
-        },
-      },
-    },
-    '/api/v1/schedules/{id}/run': {
-      post: {
-        summary: 'Trigger Schedule Now',
-        tags: ['Schedules'],
-        responses: {
-          '200': { description: 'Schedule triggered manually' },
+          '200': { description: 'Paginated job listing' },
+          '401': { description: 'Unauthorized' },
+          '403': { description: 'Forbidden' },
         },
       },
     },
   },
   components: {
+    securitySchemes: {
+      bearerAuth: {
+        type: 'http',
+        scheme: 'bearer',
+        bearerFormat: 'JWT',
+        description: 'Enter JWT access token',
+      },
+      apiKeyAuth: {
+        type: 'apiKey',
+        in: 'header',
+        name: 'X-API-Key',
+        description: 'Enter prefixed API Key (e.g. flux_live_...)',
+      },
+    },
     schemas: {
       JobStatus: {
         type: 'string',
@@ -414,32 +210,7 @@ export const openApiSpec = {
           id: { type: 'string', format: 'uuid' },
           name: { type: 'string' },
           queueName: { type: 'string' },
-          idempotencyKey: { type: 'string', nullable: true },
-          workerId: { type: 'string', nullable: true },
-          payload: { type: 'object' },
-          metadata: { type: 'object' },
           status: { $ref: '#/components/schemas/JobStatus' },
-          priority: { $ref: '#/components/schemas/JobPriority' },
-          retryCount: { type: 'integer' },
-          maxRetries: { type: 'integer' },
-          retryDelay: { type: 'integer' },
-          nextRetryAt: { type: 'string', format: 'date-time', nullable: true },
-          scheduledFor: { type: 'string', format: 'date-time', nullable: true },
-          delayUntil: { type: 'string', format: 'date-time', nullable: true },
-          attempts: { type: 'integer' },
-          version: { type: 'integer' },
-          createdAt: { type: 'string', format: 'date-time' },
-          updatedAt: { type: 'string', format: 'date-time' },
-          lockedAt: { type: 'string', format: 'date-time', nullable: true },
-          startedAt: { type: 'string', format: 'date-time', nullable: true },
-          completedAt: { type: 'string', format: 'date-time', nullable: true },
-          failedAt: { type: 'string', format: 'date-time', nullable: true },
-          executionTimeMs: { type: 'integer', nullable: true },
-          errorMessage: { type: 'string', nullable: true },
-          errorStack: { type: 'string', nullable: true },
-          failureReason: { type: 'string', nullable: true },
-          isDeleted: { type: 'boolean' },
-          deletedAt: { type: 'string', format: 'date-time', nullable: true },
         },
       },
       JobResponseWrapper: {
@@ -450,48 +221,6 @@ export const openApiSpec = {
           timestamp: { type: 'string', format: 'date-time' },
         },
       },
-      ListJobsResponseWrapper: {
-        type: 'object',
-        properties: {
-          success: { type: 'boolean', example: true },
-          data: {
-            type: 'object',
-            properties: {
-              items: {
-                type: 'array',
-                items: { $ref: '#/components/schemas/JobDTO' },
-              },
-              pagination: {
-                type: 'object',
-                properties: {
-                  page: { type: 'integer', example: 1 },
-                  limit: { type: 'integer', example: 20 },
-                  total: { type: 'integer', example: 42 },
-                  totalPages: { type: 'integer', example: 3 },
-                  hasNext: { type: 'boolean', example: true },
-                  hasPrevious: { type: 'boolean', example: false },
-                },
-              },
-            },
-          },
-          timestamp: { type: 'string', format: 'date-time' },
-        },
-      },
-      DeleteJobResponseWrapper: {
-        type: 'object',
-        properties: {
-          success: { type: 'boolean', example: true },
-          data: {
-            type: 'object',
-            properties: {
-              id: { type: 'string', format: 'uuid' },
-              deleted: { type: 'boolean', example: true },
-              deletedAt: { type: 'string', format: 'date-time' },
-            },
-          },
-          timestamp: { type: 'string', format: 'date-time' },
-        },
-      },
       ErrorResponse: {
         type: 'object',
         properties: {
@@ -499,13 +228,11 @@ export const openApiSpec = {
           error: {
             type: 'object',
             properties: {
-              code: { type: 'string', example: 'JOB_NOT_FOUND' },
-              message: { type: 'string', example: "Job with ID '...' was not found" },
-              details: { type: 'object', nullable: true },
+              code: { type: 'string', example: 'AUTHENTICATION_REQUIRED' },
+              message: { type: 'string', example: 'Authentication credentials are required' },
             },
           },
           timestamp: { type: 'string', format: 'date-time' },
-          path: { type: 'string', example: '/api/v1/jobs/123' },
         },
       },
       HealthResponse: {
@@ -514,35 +241,6 @@ export const openApiSpec = {
           status: { type: 'string', example: 'UP' },
           service: { type: 'string', example: 'Flux' },
           version: { type: 'string', example: '1.0.0' },
-          uptime: { type: 'number', example: 142.5 },
-          timestamp: { type: 'string', format: 'date-time' },
-          components: {
-            type: 'object',
-            properties: {
-              database: {
-                type: 'object',
-                properties: {
-                  status: { type: 'string', example: 'UP' },
-                  latencyMs: { type: 'integer', example: 2 },
-                },
-              },
-              redis: {
-                type: 'object',
-                properties: {
-                  status: { type: 'string', example: 'UP' },
-                  latencyMs: { type: 'integer', example: 1 },
-                },
-              },
-              migrations: {
-                type: 'object',
-                properties: {
-                  status: { type: 'string', example: 'UP' },
-                  appliedCount: { type: 'integer', example: 2 },
-                  latest: { type: 'string', example: '002_add_soft_delete_to_jobs.sql' },
-                },
-              },
-            },
-          },
         },
       },
     },

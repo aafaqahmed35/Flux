@@ -12,6 +12,7 @@ import { workerRegistry } from '../workers/worker.registry.js';
 import { schedulerRuntime } from '../schedules/scheduler.runtime.js';
 import { prometheusRegistry } from '../observability/prometheus.js';
 import { openTelemetryManager } from '../observability/opentelemetry.js';
+import { isAuthEnabled } from '../auth/auth.constants.js';
 
 const parseRedisInfo = (infoRaw: string): Record<string, string> => {
   const result: Record<string, string> = {};
@@ -228,6 +229,12 @@ export const getHealth = asyncHandler(async (_req: Request, res: Response): Prom
         serviceName: process.env.OTEL_SERVICE_NAME || 'flux',
         version: serverConfig.appVersion,
         traceExporter: process.env.OTEL_TRACES_EXPORTER || 'otlp',
+      },
+      security: {
+        authentication: isAuthEnabled(),
+        apiKeys: true,
+        rateLimiting: true,
+        auditLogging: true,
       },
     },
   };
