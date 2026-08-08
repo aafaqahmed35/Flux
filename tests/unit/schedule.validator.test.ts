@@ -1,4 +1,7 @@
-import { validateCreateSchedule, validateUpdateSchedule } from '../../src/schedules/schedule.validator';
+import {
+  validateCreateSchedule,
+  validateUpdateSchedule,
+} from '../../src/schedules/schedule.validator.js';
 
 describe('Schedule Validator Unit Tests', () => {
   describe('validateCreateSchedule', () => {

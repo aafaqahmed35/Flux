@@ -1,6 +1,6 @@
-import { getRedisClient } from '../../src/redis/redis';
-import { SchedulerRuntime } from '../../src/schedules/scheduler.runtime';
-import { SCHEDULER_REDIS_LOCK_KEY } from '../../src/schedules/schedule.constants';
+import { redisClient, closeRedisConnection } from '../../src/redis/redis.js';
+import { SchedulerRuntime } from '../../src/schedules/scheduler.runtime.js';
+import { SCHEDULER_REDIS_LOCK_KEY } from '../../src/schedules/schedule.constants.js';
 
 describe('Scheduler Leader Lock Distributed Failover Integration Test', () => {
   let instance1: SchedulerRuntime;
@@ -11,10 +11,17 @@ describe('Scheduler Leader Lock Distributed Failover Integration Test', () => {
     if (instance2) await instance2.stop();
 
     try {
-      const redis = getRedisClient();
-      await redis.del(SCHEDULER_REDIS_LOCK_KEY);
+      await redisClient.del(SCHEDULER_REDIS_LOCK_KEY);
     } catch {
       // Cleanup fallback
+    }
+  });
+
+  afterAll(async () => {
+    try {
+      await closeRedisConnection();
+    } catch {
+      // Cleanup
     }
   });
 
@@ -31,8 +38,7 @@ describe('Scheduler Leader Lock Distributed Failover Integration Test', () => {
     expect(instance2.isLeader()).toBe(false);
 
     // 3. Verify Redis lock key holds instance-1
-    const redis = getRedisClient();
-    const currentLeader = await redis.get(SCHEDULER_REDIS_LOCK_KEY);
+    const currentLeader = await redisClient.get(SCHEDULER_REDIS_LOCK_KEY);
     expect(currentLeader).toBe('instance-1');
 
     // 4. Instance 1 stops and releases leader lock
@@ -40,11 +46,17 @@ describe('Scheduler Leader Lock Distributed Failover Integration Test', () => {
     expect(instance1.isLeader()).toBe(false);
 
     // 5. Instance 2 should acquire leader lock upon next attempt
-    // Manually invoke start or heartbeat tick for instance2
-    await instance2.start();
+    const instance2Internal = instance2 as unknown as {
+      acquireLeaderLock(): Promise<boolean>;
+      startPollingLoop(): void;
+    };
+    const acquired = await instance2Internal.acquireLeaderLock();
+    if (acquired) {
+      instance2Internal.startPollingLoop();
+    }
     expect(instance2.isLeader()).toBe(true);
 
-    const newLeader = await redis.get(SCHEDULER_REDIS_LOCK_KEY);
+    const newLeader = await redisClient.get(SCHEDULER_REDIS_LOCK_KEY);
     expect(newLeader).toBe('instance-2');
   });
 });

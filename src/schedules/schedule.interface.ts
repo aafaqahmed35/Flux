@@ -13,7 +13,10 @@ export interface IScheduleRepository {
   findById(id: string): Promise<Schedule | null>;
   findByName(name: string): Promise<Schedule | null>;
   listSchedules(options: ListSchedulesOptions): Promise<PaginatedSchedulesResult>;
-  updateSchedule(id: string, input: UpdateScheduleInput & { nextRunAt?: Date }): Promise<Schedule | null>;
+  updateSchedule(
+    id: string,
+    input: UpdateScheduleInput & { nextRunAt?: Date },
+  ): Promise<Schedule | null>;
   deleteSchedule(id: string): Promise<boolean>;
   findDueSchedules(limit?: number): Promise<Schedule[]>;
   updateNextRun(id: string, nextRunAt: Date, lastRunAt?: Date): Promise<Schedule | null>;

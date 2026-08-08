@@ -1,6 +1,4 @@
-import { JobService } from '../services/job.service';
-import { CronEngine } from './cron.engine';
-import { InvalidCronExpressionError, ScheduleNotFoundError } from './schedule.errors';
+import { ScheduleNotFoundError } from './schedule.errors';
 import { IScheduleRepository, IScheduleService } from './schedule.interface';
 import { ScheduleRepository } from './schedule.repository';
 import {
@@ -12,6 +10,8 @@ import {
   PaginatedSchedulesResult,
 } from './schedule.types';
 import { validateCreateSchedule, validateUpdateSchedule } from './schedule.validator';
+import { JobService } from '../services/job.service.js';
+import { CronEngine } from './cron.engine.js';
 
 export class ScheduleService implements IScheduleService {
   private repository: IScheduleRepository;
@@ -102,7 +102,7 @@ export class ScheduleService implements IScheduleService {
   public async triggerScheduleNow(id: string): Promise<{ schedule: Schedule; jobId: string }> {
     const schedule = await this.getScheduleById(id);
 
-    const job = await this.jobService.createJob({
+    const jobResponse = await this.jobService.createJob({
       name: schedule.name,
       queueName: schedule.queueName,
       payload: schedule.payload,
@@ -113,9 +113,11 @@ export class ScheduleService implements IScheduleService {
       },
     });
 
+    const jobId = jobResponse.job.id;
+
     await this.repository.addExecutionRecord({
       scheduleId: schedule.id,
-      jobId: job.id,
+      jobId,
       status: 'SUCCESS',
       startedAt: new Date(),
       finishedAt: new Date(),
@@ -123,10 +125,13 @@ export class ScheduleService implements IScheduleService {
       errorMessage: null,
     });
 
-    return { schedule, jobId: job.id };
+    return { schedule, jobId };
   }
 
-  public async getExecutionHistory(scheduleId: string, limit?: number): Promise<ScheduleExecutionRecord[]> {
+  public async getExecutionHistory(
+    scheduleId: string,
+    limit?: number,
+  ): Promise<ScheduleExecutionRecord[]> {
     await this.getScheduleById(scheduleId);
     return this.repository.getExecutionHistory(scheduleId, limit);
   }

@@ -1,9 +1,10 @@
-import { getPgPool } from '../../src/database/postgres';
-import { getRedisClient } from '../../src/redis/redis';
-import { ScheduleService } from '../../src/schedules/schedule.service';
-import { SchedulerRuntime } from '../../src/schedules/scheduler.runtime';
-import { WorkerRuntime } from '../../src/workers/worker.runtime';
-import { processorRegistry } from '../../src/workers/processor.registry';
+import { pgPool, closePostgresConnection } from '../../src/database/postgres.js';
+import { redisClient, closeRedisConnection } from '../../src/redis/redis.js';
+import { ScheduleService } from '../../src/schedules/schedule.service.js';
+import { SchedulerRuntime } from '../../src/schedules/scheduler.runtime.js';
+import { WorkerRuntime } from '../../src/workers/worker.runtime.js';
+import { processorRegistry } from '../../src/workers/processor.registry.js';
+import { Job } from '../../src/types/job.types.js';
 
 describe('Scheduler Engine End-to-End Integration Test', () => {
   const testQueue = `sch-e2e-${Date.now()}`;
@@ -17,11 +18,10 @@ describe('Scheduler Engine End-to-End Integration Test', () => {
     scheduleService = new ScheduleService();
 
     // Register test processor
-    processorRegistry.register({
-      queueName: testQueue,
-      handler: async (job) => {
+    processorRegistry.registerProcessor(testQueue, {
+      execute: (job: Job) => {
         processedCount++;
-        return { success: true, processedJobId: job.id };
+        return Promise.resolve({ success: true, processedJobId: job.id });
       },
     });
 
@@ -42,23 +42,24 @@ describe('Scheduler Engine End-to-End Integration Test', () => {
       await workerRuntime.stop();
     }
 
-    processorRegistry.unregister(testQueue);
+    processorRegistry.removeProcessor(testQueue);
 
     try {
-      const pool = getPgPool();
-      await pool.query(
+      await pgPool.query(
         'DELETE FROM schedule_execution_history WHERE schedule_id IN (SELECT id FROM schedules WHERE queue_name = $1)',
         [testQueue],
       );
-      await pool.query('DELETE FROM schedules WHERE queue_name = $1', [testQueue]);
-      await pool.query('DELETE FROM jobs WHERE queue_name = $1', [testQueue]);
+      await pgPool.query('DELETE FROM schedules WHERE queue_name = $1', [testQueue]);
+      await pgPool.query('DELETE FROM jobs WHERE queue_name = $1', [testQueue]);
 
-      const redis = getRedisClient();
-      await redis.del(`flux:queue:${testQueue}`);
-      await redis.del('flux:scheduler:leader');
+      await redisClient.del(`flux:queue:${testQueue}`);
+      await redisClient.del('flux:scheduler:leader');
     } catch {
       // Cleanup fallback
     }
+
+    await closePostgresConnection();
+    await closeRedisConnection();
   });
 
   it('should create schedule, execute tick(), enqueue job to Redis, and have Worker process it', async () => {
@@ -74,10 +75,10 @@ describe('Scheduler Engine End-to-End Integration Test', () => {
     scheduleId = schedule.id;
 
     // Manually force next_run_at to past to trigger due polling
-    const pool = getPgPool();
-    await pool.query('UPDATE schedules SET next_run_at = NOW() - INTERVAL \'1 minute\' WHERE id = $1', [
-      scheduleId,
-    ]);
+    await pgPool.query(
+      "UPDATE schedules SET next_run_at = NOW() - INTERVAL '1 minute' WHERE id = $1",
+      [scheduleId],
+    );
 
     // 2. Start SchedulerRuntime
     schedulerRuntime = new SchedulerRuntime(undefined, undefined, `scheduler-e2e-${Date.now()}`);
@@ -87,7 +88,7 @@ describe('Scheduler Engine End-to-End Integration Test', () => {
     await schedulerRuntime.tick();
 
     // 3. Verify job created in PostgreSQL and enqueued to Redis
-    const jobsRes = await pool.query('SELECT * FROM jobs WHERE queue_name = $1', [testQueue]);
+    const jobsRes = await pgPool.query('SELECT * FROM jobs WHERE queue_name = $1', [testQueue]);
     expect(jobsRes.rows.length).toBeGreaterThanOrEqual(1);
 
     // 4. Wait for WorkerRuntime to process the job
@@ -100,13 +101,16 @@ describe('Scheduler Engine End-to-End Integration Test', () => {
     expect(processedCount).toBe(1);
 
     // 5. Verify next_run_at was updated to future timestamp
-    const updatedScheduleRes = await pool.query('SELECT * FROM schedules WHERE id = $1', [scheduleId]);
-    const updatedNextRun = new Date(updatedScheduleRes.rows[0].next_run_at);
+    const updatedScheduleRes = await pgPool.query<{ next_run_at: Date | string }>(
+      'SELECT * FROM schedules WHERE id = $1',
+      [scheduleId],
+    );
+    const updatedNextRun = new Date(String(updatedScheduleRes.rows[0]?.next_run_at));
     expect(updatedNextRun.getTime()).toBeGreaterThan(Date.now());
 
     // 6. Verify execution history recorded
     const history = await scheduleService.getExecutionHistory(scheduleId);
     expect(history.length).toBeGreaterThanOrEqual(1);
-    expect(history[0].status).toBe('SUCCESS');
+    expect(history[0]?.status).toBe('SUCCESS');
   });
 });

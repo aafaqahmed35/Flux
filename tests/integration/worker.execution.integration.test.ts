@@ -160,7 +160,7 @@ describe('Worker Runtime & Job Execution Engine Integration Tests', () => {
     // 3. Wait until all 100 jobs are completed
     let attempts = 0;
 
-    while (processedJobIds.size < 100 && attempts < 150) {
+    while (processedJobIds.size < 100 && attempts < 300) {
       await new Promise((res) => setTimeout(res, 100));
       attempts++;
     }

@@ -9,6 +9,7 @@ import { retryEngine } from '../retry/retry.engine.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { processorRegistry } from '../workers/processor.registry.js';
 import { workerRegistry } from '../workers/worker.registry.js';
+import { schedulerRuntime } from '../schedules/scheduler.runtime.js';
 
 const parseRedisInfo = (infoRaw: string): Record<string, string> => {
   const result: Record<string, string> = {};
@@ -156,16 +157,32 @@ export const getHealth = asyncHandler(async (_req: Request, res: Response): Prom
   }
 
   let schedulerMetrics = {
+    leader: false,
+    running: false,
     activeSchedules: 0,
     dueSchedules: 0,
+    schedulerLagMs: 0,
+    pollInterval: 5000,
+    lastTick: null as string | null,
   };
 
   try {
-    const activeRes = await pgPool.query('SELECT COUNT(*) FROM schedules WHERE enabled = TRUE');
-    const dueRes = await pgPool.query('SELECT COUNT(*) FROM schedules WHERE enabled = TRUE AND next_run_at <= NOW()');
+    const activeRes = await pgPool.query<{ count: string }>(
+      'SELECT COUNT(*) FROM schedules WHERE enabled = TRUE',
+    );
+    const dueRes = await pgPool.query<{ count: string }>(
+      'SELECT COUNT(*) FROM schedules WHERE enabled = TRUE AND next_run_at <= NOW()',
+    );
+    const runtimeMetrics = schedulerRuntime.getMetrics();
+
     schedulerMetrics = {
-      activeSchedules: parseInt(activeRes.rows[0].count, 10),
-      dueSchedules: parseInt(dueRes.rows[0].count, 10),
+      leader: runtimeMetrics.leader,
+      running: runtimeMetrics.running,
+      activeSchedules: parseInt(activeRes.rows[0]?.count ?? '0', 10),
+      dueSchedules: parseInt(dueRes.rows[0]?.count ?? '0', 10),
+      schedulerLagMs: runtimeMetrics.schedulerLagMs,
+      pollInterval: runtimeMetrics.pollIntervalMs,
+      lastTick: runtimeMetrics.lastTick,
     };
   } catch {
     // Graceful fallback

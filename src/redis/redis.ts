@@ -53,7 +53,12 @@ export const checkRedisConnection = async (): Promise<boolean> => {
 export const closeRedisConnection = async (): Promise<void> => {
   try {
     if (redisClient.status !== 'end') {
-      await redisClient.quit();
+      try {
+        await redisClient.quit();
+      } catch {
+        // Fallback to disconnect
+      }
+      redisClient.disconnect();
       appLogger.info('Redis connection disconnected gracefully');
     }
   } catch (err: unknown) {

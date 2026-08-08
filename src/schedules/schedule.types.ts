@@ -1,5 +1,3 @@
-import { RecordStatus } from '../types/common.types';
-
 export interface Schedule {
   id: string;
   name: string;

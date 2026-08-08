@@ -15,4 +15,3 @@ router.use('/api/v1/schedules', createScheduleRouter());
 
 export const appRouter = router;
 export default router;
-

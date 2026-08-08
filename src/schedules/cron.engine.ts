@@ -45,7 +45,11 @@ export class CronEngine {
         return false;
       }
 
-      const [minute, hour, dayOfMonth, month, dayOfWeek] = parts;
+      const minute = parts[0] ?? '';
+      const hour = parts[1] ?? '';
+      const dayOfMonth = parts[2] ?? '';
+      const month = parts[3] ?? '';
+      const dayOfWeek = parts[4] ?? '';
 
       return (
         this.parseField(minute, 0, 59) !== null &&
@@ -74,20 +78,39 @@ export class CronEngine {
     }
 
     const parts = normalized.split(/\s+/);
-    const minuteAllowed = this.parseField(parts[0], 0, 59)!;
-    const hourAllowed = this.parseField(parts[1], 0, 23)!;
-    const dayOfMonthAllowed = this.parseField(parts[2], 1, 31)!;
-    const monthAllowed = this.parseField(parts[3], 1, 12)!;
-    const dayOfWeekAllowed = this.parseField(parts[4], 0, 7)!;
+    const minuteStr = parts[0] ?? '*';
+    const hourStr = parts[1] ?? '*';
+    const domStr = parts[2] ?? '*';
+    const monthStr = parts[3] ?? '*';
+    const dowStr = parts[4] ?? '*';
+
+    const minuteAllowed = this.parseField(minuteStr, 0, 59);
+    const hourAllowed = this.parseField(hourStr, 0, 23);
+    const dayOfMonthAllowed = this.parseField(domStr, 1, 31);
+    const monthAllowed = this.parseField(monthStr, 1, 12);
+    const dayOfWeekAllowed = this.parseField(dowStr, 0, 7);
+
+    if (
+      !minuteAllowed ||
+      !hourAllowed ||
+      !dayOfMonthAllowed ||
+      !monthAllowed ||
+      !dayOfWeekAllowed
+    ) {
+      throw new InvalidCronExpressionError(expression);
+    }
 
     // Convert 7 (Sunday) to 0 if present in dayOfWeekAllowed
     if (dayOfWeekAllowed.has(7)) {
       dayOfWeekAllowed.add(0);
     }
 
-    const startFrom = options?.fromDate ? new Date(options.fromDate.getTime() + 1000) : new Date(Date.now() + 1000);
-    // Start searching minute-by-minute starting at 0 seconds
-    const current = new Date(startFrom.getTime());
+    const isDomRestricted = domStr !== '*';
+    const isDowRestricted = dowStr !== '*';
+
+    // Guaranteed strictly-after invariant: candidate date must be > fromDate
+    const baseTime = options?.fromDate ? options.fromDate.getTime() : Date.now();
+    const current = new Date(baseTime + 60000);
     current.setMilliseconds(0);
     current.setSeconds(0);
 
@@ -98,13 +121,23 @@ export class CronEngine {
     while (iterations < maxIterations) {
       const partsTz = this.getZonedParts(current, timezone);
 
-      if (
-        monthAllowed.has(partsTz.month) &&
-        dayOfMonthAllowed.has(partsTz.dayOfMonth) &&
-        dayOfWeekAllowed.has(partsTz.dayOfWeek) &&
-        hourAllowed.has(partsTz.hour) &&
-        minuteAllowed.has(partsTz.minute)
-      ) {
+      const monthMatches = monthAllowed.has(partsTz.month);
+      const hourMatches = hourAllowed.has(partsTz.hour);
+      const minuteMatches = minuteAllowed.has(partsTz.minute);
+
+      const domMatches = dayOfMonthAllowed.has(partsTz.dayOfMonth);
+      const dowMatches = dayOfWeekAllowed.has(partsTz.dayOfWeek);
+
+      let dayMatches = false;
+      if (isDomRestricted && isDowRestricted) {
+        // POSIX standard: If both DOM and DOW are restricted, match if EITHER matches (OR)
+        dayMatches = domMatches || dowMatches;
+      } else {
+        // Normal evaluation (AND)
+        dayMatches = domMatches && dowMatches;
+      }
+
+      if (monthMatches && dayMatches && hourMatches && minuteMatches) {
         return current;
       }
 
@@ -113,7 +146,9 @@ export class CronEngine {
       iterations++;
     }
 
-    throw new Error(`Could not find next execution date for expression '${expression}' within safety limit`);
+    throw new Error(
+      `Could not find next execution date for expression '${expression}' within safety limit`,
+    );
   }
 
   /**
@@ -130,8 +165,9 @@ export class CronEngine {
       const stepParts = subpart.split('/');
       if (stepParts.length > 2) return null;
 
-      const basePattern = stepParts[0];
-      const step = stepParts.length === 2 ? parseInt(stepParts[1], 10) : 1;
+      const basePattern = stepParts[0] ?? '';
+      const stepStr = stepParts[1];
+      const step = stepParts.length === 2 && stepStr !== undefined ? parseInt(stepStr, 10) : 1;
       if (isNaN(step) || step <= 0) return null;
 
       let start = min;
@@ -141,8 +177,10 @@ export class CronEngine {
         if (basePattern.includes('-')) {
           const rangeParts = basePattern.split('-');
           if (rangeParts.length !== 2) return null;
-          start = parseInt(rangeParts[0], 10);
-          end = parseInt(rangeParts[1], 10);
+          const startStr = rangeParts[0] ?? '';
+          const endStr = rangeParts[1] ?? '';
+          start = parseInt(startStr, 10);
+          end = parseInt(endStr, 10);
           if (isNaN(start) || isNaN(end) || start < min || end > max || start > end) {
             return null;
           }
@@ -187,7 +225,7 @@ export class CronEngine {
       partsMap[p.type] = p.value;
     }
 
-    const weekdayStr = partsMap['weekday'];
+    const weekdayStr = partsMap['weekday'] ?? 'Sun';
     const weekdayMap: Record<string, number> = {
       Sun: 0,
       Mon: 1,
@@ -198,14 +236,14 @@ export class CronEngine {
       Sat: 6,
     };
 
-    let hourVal = parseInt(partsMap['hour'], 10);
+    let hourVal = parseInt(partsMap['hour'] ?? '0', 10);
     if (hourVal === 24) hourVal = 0; // Intl library 24-hour edge case
 
     return {
-      minute: parseInt(partsMap['minute'], 10),
+      minute: parseInt(partsMap['minute'] ?? '0', 10),
       hour: hourVal,
-      dayOfMonth: parseInt(partsMap['day'], 10),
-      month: parseInt(partsMap['month'], 10),
+      dayOfMonth: parseInt(partsMap['day'] ?? '1', 10),
+      month: parseInt(partsMap['month'] ?? '1', 10),
       dayOfWeek: weekdayMap[weekdayStr] ?? 0,
     };
   }

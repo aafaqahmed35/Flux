@@ -1,11 +1,13 @@
-import { ScheduleService } from '../../src/schedules/schedule.service';
-import { ScheduleNotFoundError } from '../../src/schedules/schedule.errors';
-import { IScheduleRepository } from '../../src/schedules/schedule.interface';
-import { Schedule } from '../../src/schedules/schedule.types';
+/* eslint-disable @typescript-eslint/unbound-method */
+import { ScheduleService } from '../../src/schedules/schedule.service.js';
+import { ScheduleNotFoundError } from '../../src/schedules/schedule.errors.js';
+import { IScheduleRepository } from '../../src/schedules/schedule.interface.js';
+import { Schedule } from '../../src/schedules/schedule.types.js';
+import { JobService } from '../../src/services/job.service.js';
 
 describe('ScheduleService Unit Tests', () => {
   let mockRepo: jest.Mocked<IScheduleRepository>;
-  let mockJobService: any;
+  let mockJobService: jest.Mocked<JobService>;
   let service: ScheduleService;
 
   const mockSchedule: Schedule = {
@@ -41,8 +43,8 @@ describe('ScheduleService Unit Tests', () => {
     };
 
     mockJobService = {
-      createJob: jest.fn().mockResolvedValue({ id: 'job-999' }),
-    };
+      createJob: jest.fn().mockResolvedValue({ job: { id: 'job-999' }, isDuplicate: false }),
+    } as unknown as jest.Mocked<JobService>;
 
     service = new ScheduleService(mockRepo, mockJobService);
   });
@@ -57,7 +59,7 @@ describe('ScheduleService Unit Tests', () => {
     });
 
     expect(result.id).toBe('sch-123');
-    expect(mockRepo.createSchedule).toHaveBeenCalled();
+    expect(mockRepo.createSchedule).toHaveBeenCalledTimes(1);
   });
 
   it('should throw ScheduleNotFoundError when schedule does not exist', async () => {
@@ -84,8 +86,8 @@ describe('ScheduleService Unit Tests', () => {
     const result = await service.triggerScheduleNow('sch-123');
 
     expect(result.jobId).toBe('job-999');
-    expect(mockJobService.createJob).toHaveBeenCalled();
-    expect(mockRepo.addExecutionRecord).toHaveBeenCalled();
+    expect(mockJobService.createJob).toHaveBeenCalledTimes(1);
+    expect(mockRepo.addExecutionRecord).toHaveBeenCalledTimes(1);
   });
 
   it('should toggle schedule enabled status', async () => {

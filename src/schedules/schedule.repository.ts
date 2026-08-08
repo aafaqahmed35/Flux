@@ -1,5 +1,5 @@
-import { getPgPool } from '../database/postgres';
-import { logger } from '../utils/logger';
+import { pgPool } from '../database/postgres.js';
+import appLogger from '../logger/logger.js';
 import { IScheduleRepository } from './schedule.interface';
 import {
   Schedule,
@@ -10,17 +10,47 @@ import {
   PaginatedSchedulesResult,
 } from './schedule.types';
 
+interface ScheduleRow {
+  id: string;
+  name: string;
+  queue_name: string;
+  cron_expression: string;
+  timezone: string;
+  payload: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  enabled: boolean;
+  next_run_at: string | Date;
+  last_run_at?: string | Date | null;
+  last_success_at?: string | Date | null;
+  last_failure_at?: string | Date | null;
+  created_at: string | Date;
+  updated_at: string | Date;
+}
+
+interface ScheduleExecutionRecordRow {
+  id: string;
+  schedule_id: string;
+  job_id?: string | null;
+  started_at: string | Date;
+  finished_at?: string | Date | null;
+  status: 'SUCCESS' | 'FAILURE' | 'RUNNING';
+  execution_time_ms?: number | null;
+  worker_id?: string | null;
+  error_message?: string | null;
+  created_at: string | Date;
+}
+
 export class ScheduleRepository implements IScheduleRepository {
-  private mapRowToSchedule(row: any): Schedule {
+  private mapRowToSchedule(row: ScheduleRow): Schedule {
     return {
-      id: row.id,
-      name: row.name,
-      queueName: row.queue_name,
-      cronExpression: row.cron_expression,
-      timezone: row.timezone,
+      id: String(row.id),
+      name: String(row.name),
+      queueName: String(row.queue_name),
+      cronExpression: String(row.cron_expression),
+      timezone: String(row.timezone),
       payload: row.payload || {},
       metadata: row.metadata || {},
-      enabled: row.enabled,
+      enabled: Boolean(row.enabled),
       nextRunAt: new Date(row.next_run_at),
       lastRunAt: row.last_run_at ? new Date(row.last_run_at) : null,
       lastSuccessAt: row.last_success_at ? new Date(row.last_success_at) : null,
@@ -30,23 +60,25 @@ export class ScheduleRepository implements IScheduleRepository {
     };
   }
 
-  private mapRowToExecutionRecord(row: any): ScheduleExecutionRecord {
+  private mapRowToExecutionRecord(row: ScheduleExecutionRecordRow): ScheduleExecutionRecord {
     return {
-      id: row.id,
-      scheduleId: row.schedule_id,
-      jobId: row.job_id,
+      id: String(row.id),
+      scheduleId: String(row.schedule_id),
+      jobId: row.job_id ? String(row.job_id) : null,
       startedAt: new Date(row.started_at),
       finishedAt: row.finished_at ? new Date(row.finished_at) : null,
       status: row.status,
-      executionTimeMs: row.execution_time_ms !== null ? Number(row.execution_time_ms) : null,
-      workerId: row.worker_id,
-      errorMessage: row.error_message,
+      executionTimeMs:
+        row.execution_time_ms !== null && row.execution_time_ms !== undefined
+          ? Number(row.execution_time_ms)
+          : null,
+      workerId: row.worker_id ? String(row.worker_id) : null,
+      errorMessage: row.error_message ? String(row.error_message) : null,
       createdAt: new Date(row.created_at),
     };
   }
 
   public async createSchedule(input: CreateScheduleInput & { nextRunAt: Date }): Promise<Schedule> {
-    const pool = getPgPool();
     const query = `
       INSERT INTO schedules (
         name, queue_name, cron_expression, timezone, payload, metadata, enabled, next_run_at
@@ -65,33 +97,38 @@ export class ScheduleRepository implements IScheduleRepository {
       input.nextRunAt.toISOString(),
     ];
 
-    const result = await pool.query(query, values);
-    logger.info('Schedule created in PostgreSQL', { scheduleId: result.rows[0].id, name: input.name });
+    const result = await pgPool.query<ScheduleRow>(query, values);
+    if (!result.rows[0]) {
+      throw new Error('Failed to insert schedule');
+    }
+    appLogger.info('Schedule created in PostgreSQL', {
+      scheduleId: result.rows[0].id,
+      name: input.name,
+    });
     return this.mapRowToSchedule(result.rows[0]);
   }
 
   public async findById(id: string): Promise<Schedule | null> {
-    const pool = getPgPool();
-    const result = await pool.query('SELECT * FROM schedules WHERE id = $1', [id]);
-    if (result.rows.length === 0) return null;
+    const result = await pgPool.query<ScheduleRow>('SELECT * FROM schedules WHERE id = $1', [id]);
+    if (result.rows.length === 0 || !result.rows[0]) return null;
     return this.mapRowToSchedule(result.rows[0]);
   }
 
   public async findByName(name: string): Promise<Schedule | null> {
-    const pool = getPgPool();
-    const result = await pool.query('SELECT * FROM schedules WHERE name = $1', [name]);
-    if (result.rows.length === 0) return null;
+    const result = await pgPool.query<ScheduleRow>('SELECT * FROM schedules WHERE name = $1', [
+      name,
+    ]);
+    if (result.rows.length === 0 || !result.rows[0]) return null;
     return this.mapRowToSchedule(result.rows[0]);
   }
 
   public async listSchedules(options: ListSchedulesOptions): Promise<PaginatedSchedulesResult> {
-    const pool = getPgPool();
     const page = Math.max(1, options.page || 1);
     const limit = Math.max(1, Math.min(100, options.limit || 20));
     const offset = (page - 1) * limit;
 
     const conditions: string[] = [];
-    const values: any[] = [];
+    const values: unknown[] = [];
     let paramIndex = 1;
 
     if (options.queueName) {
@@ -112,8 +149,8 @@ export class ScheduleRepository implements IScheduleRepository {
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const countQuery = `SELECT COUNT(*) FROM schedules ${whereClause}`;
-    const countResult = await pool.query(countQuery, values);
-    const total = parseInt(countResult.rows[0].count, 10);
+    const countResult = await pgPool.query<{ count: string }>(countQuery, values);
+    const total = parseInt(countResult.rows[0]?.count ?? '0', 10);
 
     const selectQuery = `
       SELECT * FROM schedules
@@ -122,7 +159,7 @@ export class ScheduleRepository implements IScheduleRepository {
       LIMIT $${paramIndex++} OFFSET $${paramIndex++}
     `;
 
-    const selectResult = await pool.query(selectQuery, [...values, limit, offset]);
+    const selectResult = await pgPool.query<ScheduleRow>(selectQuery, [...values, limit, offset]);
     const schedules = selectResult.rows.map((row) => this.mapRowToSchedule(row));
 
     return {
@@ -138,9 +175,8 @@ export class ScheduleRepository implements IScheduleRepository {
     id: string,
     input: UpdateScheduleInput & { nextRunAt?: Date },
   ): Promise<Schedule | null> {
-    const pool = getPgPool();
     const setClauses: string[] = ['updated_at = NOW()'];
-    const values: any[] = [id];
+    const values: unknown[] = [id];
     let paramIndex = 2;
 
     if (input.name !== undefined) {
@@ -190,31 +226,32 @@ export class ScheduleRepository implements IScheduleRepository {
       RETURNING *
     `;
 
-    const result = await pool.query(query, values);
-    if (result.rows.length === 0) return null;
+    const result = await pgPool.query<ScheduleRow>(query, values);
+    if (result.rows.length === 0 || !result.rows[0]) return null;
     return this.mapRowToSchedule(result.rows[0]);
   }
 
   public async deleteSchedule(id: string): Promise<boolean> {
-    const pool = getPgPool();
-    const result = await pool.query('DELETE FROM schedules WHERE id = $1', [id]);
+    const result = await pgPool.query('DELETE FROM schedules WHERE id = $1', [id]);
     return (result.rowCount ?? 0) > 0;
   }
 
   public async findDueSchedules(limit: number = 50): Promise<Schedule[]> {
-    const pool = getPgPool();
     const query = `
       SELECT * FROM schedules
       WHERE enabled = TRUE AND next_run_at <= NOW()
       ORDER BY next_run_at ASC
       LIMIT $1
     `;
-    const result = await pool.query(query, [limit]);
+    const result = await pgPool.query<ScheduleRow>(query, [limit]);
     return result.rows.map((row) => this.mapRowToSchedule(row));
   }
 
-  public async updateNextRun(id: string, nextRunAt: Date, lastRunAt: Date = new Date()): Promise<Schedule | null> {
-    const pool = getPgPool();
+  public async updateNextRun(
+    id: string,
+    nextRunAt: Date,
+    lastRunAt: Date = new Date(),
+  ): Promise<Schedule | null> {
     const query = `
       UPDATE schedules
       SET next_run_at = $2,
@@ -223,21 +260,24 @@ export class ScheduleRepository implements IScheduleRepository {
       WHERE id = $1
       RETURNING *
     `;
-    const result = await pool.query(query, [id, nextRunAt.toISOString(), lastRunAt.toISOString()]);
-    if (result.rows.length === 0) return null;
+    const result = await pgPool.query<ScheduleRow>(query, [
+      id,
+      nextRunAt.toISOString(),
+      lastRunAt.toISOString(),
+    ]);
+    if (result.rows.length === 0 || !result.rows[0]) return null;
     return this.mapRowToSchedule(result.rows[0]);
   }
 
   public async toggleEnabled(id: string, enabled: boolean): Promise<Schedule | null> {
-    const pool = getPgPool();
     const query = `
       UPDATE schedules
       SET enabled = $2, updated_at = NOW()
       WHERE id = $1
       RETURNING *
     `;
-    const result = await pool.query(query, [id, enabled]);
-    if (result.rows.length === 0) return null;
+    const result = await pgPool.query<ScheduleRow>(query, [id, enabled]);
+    if (result.rows.length === 0 || !result.rows[0]) return null;
     return this.mapRowToSchedule(result.rows[0]);
   }
 
@@ -251,7 +291,6 @@ export class ScheduleRepository implements IScheduleRepository {
     workerId?: string | null;
     errorMessage?: string | null;
   }): Promise<ScheduleExecutionRecord> {
-    const pool = getPgPool();
     const query = `
       INSERT INTO schedule_execution_history (
         schedule_id, job_id, started_at, finished_at, status, execution_time_ms, worker_id, error_message
@@ -270,19 +309,24 @@ export class ScheduleRepository implements IScheduleRepository {
       record.errorMessage || null,
     ];
 
-    const result = await pool.query(query, values);
+    const result = await pgPool.query<ScheduleExecutionRecordRow>(query, values);
+    if (!result.rows[0]) {
+      throw new Error('Failed to insert schedule execution record');
+    }
     return this.mapRowToExecutionRecord(result.rows[0]);
   }
 
-  public async getExecutionHistory(scheduleId: string, limit: number = 50): Promise<ScheduleExecutionRecord[]> {
-    const pool = getPgPool();
+  public async getExecutionHistory(
+    scheduleId: string,
+    limit: number = 50,
+  ): Promise<ScheduleExecutionRecord[]> {
     const query = `
       SELECT * FROM schedule_execution_history
       WHERE schedule_id = $1
       ORDER BY created_at DESC
       LIMIT $2
     `;
-    const result = await pool.query(query, [scheduleId, limit]);
+    const result = await pgPool.query<ScheduleExecutionRecordRow>(query, [scheduleId, limit]);
     return result.rows.map((row) => this.mapRowToExecutionRecord(row));
   }
 }

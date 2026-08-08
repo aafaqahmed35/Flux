@@ -1,5 +1,8 @@
-import { CronEngine } from '../../src/schedules/cron.engine';
-import { InvalidCronExpressionError, InvalidTimezoneError } from '../../src/schedules/schedule.errors';
+import { CronEngine } from '../../src/schedules/cron.engine.js';
+import {
+  InvalidCronExpressionError,
+  InvalidTimezoneError,
+} from '../../src/schedules/schedule.errors.js';
 
 describe('CronEngine Unit Tests', () => {
   describe('isValidTimezone', () => {
@@ -64,9 +67,31 @@ describe('CronEngine Unit Tests', () => {
       expect(nextRun.toISOString()).toBe('2026-08-07T12:15:00.000Z');
     });
 
+    it('should strictly satisfy nextRun > fromDate invariant for exact minute boundary', () => {
+      const fromDate = new Date('2026-08-07T12:00:00.000Z');
+      const nextRun = CronEngine.getNextRun('* * * * *', { fromDate, timezone: 'UTC' });
+
+      expect(nextRun.getTime()).toBeGreaterThan(fromDate.getTime());
+      expect(nextRun.toISOString()).toBe('2026-08-07T12:01:00.000Z');
+    });
+
+    it('should evaluate POSIX OR semantics when DOM and DOW are both restricted', () => {
+      // Expression: 0 0 1 * 1 -> 1st of month OR Monday
+      // Aug 1 2026 is Saturday (DOM matches 1).
+      // Aug 3 2026 is Monday (DOW matches 1).
+      const fromDate = new Date('2026-07-31T23:59:00.000Z');
+      const nextRun = CronEngine.getNextRun('0 0 1 * 1', { fromDate, timezone: 'UTC' });
+
+      // Aug 1, 2026 00:00:00 is Saturday, which matches DOM=1
+      expect(nextRun.toISOString()).toBe('2026-08-01T00:00:00.000Z');
+    });
+
     it('should handle timezone offsets accurately', () => {
       const fromDate = new Date('2026-08-07T12:00:00.000Z');
-      const nextRunTz = CronEngine.getNextRun('0 9 * * *', { fromDate, timezone: 'America/New_York' });
+      const nextRunTz = CronEngine.getNextRun('0 9 * * *', {
+        fromDate,
+        timezone: 'America/New_York',
+      });
 
       // America/New_York is UTC-4 in August (EDT)
       // 9:00 AM EDT = 13:00 UTC

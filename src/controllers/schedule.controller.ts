@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
-import { ScheduleService } from '../schedules/schedule.service';
-import { logger } from '../utils/logger';
+import { ScheduleService } from '../schedules/schedule.service.js';
+import { CreateScheduleInput, UpdateScheduleInput } from '../schedules/schedule.types.js';
 
 export class ScheduleController {
   private service: ScheduleService;
@@ -40,9 +40,13 @@ export class ScheduleController {
     }
   };
 
-  public createSchedule = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  public createSchedule = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
-      const schedule = await this.service.createSchedule(req.body);
+      const schedule = await this.service.createSchedule(req.body as CreateScheduleInput);
       res.setHeader('Location', `/api/v1/schedules/${schedule.id}`);
       res.status(201).json({
         success: true,
@@ -53,9 +57,13 @@ export class ScheduleController {
     }
   };
 
-  public getScheduleById = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  public getScheduleById = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
-      const { id } = req.params;
+      const id = req.params.id ?? '';
       const schedule = await this.service.getScheduleById(id);
       res.status(200).json({
         success: true,
@@ -66,10 +74,14 @@ export class ScheduleController {
     }
   };
 
-  public updateSchedule = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  public updateSchedule = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
-      const { id } = req.params;
-      const schedule = await this.service.updateSchedule(id, req.body);
+      const id = req.params.id ?? '';
+      const schedule = await this.service.updateSchedule(id, req.body as UpdateScheduleInput);
       res.status(200).json({
         success: true,
         data: schedule,
@@ -79,9 +91,13 @@ export class ScheduleController {
     }
   };
 
-  public deleteSchedule = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  public deleteSchedule = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
-      const { id } = req.params;
+      const id = req.params.id ?? '';
       await this.service.deleteSchedule(id);
       res.status(200).json({
         success: true,
@@ -92,9 +108,13 @@ export class ScheduleController {
     }
   };
 
-  public enableSchedule = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  public enableSchedule = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
-      const { id } = req.params;
+      const id = req.params.id ?? '';
       const schedule = await this.service.enableSchedule(id);
       res.status(200).json({
         success: true,
@@ -105,9 +125,13 @@ export class ScheduleController {
     }
   };
 
-  public disableSchedule = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  public disableSchedule = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
-      const { id } = req.params;
+      const id = req.params.id ?? '';
       const schedule = await this.service.disableSchedule(id);
       res.status(200).json({
         success: true,
@@ -118,9 +142,13 @@ export class ScheduleController {
     }
   };
 
-  public runScheduleNow = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  public runScheduleNow = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
-      const { id } = req.params;
+      const id = req.params.id ?? '';
       const result = await this.service.triggerScheduleNow(id);
       res.status(200).json({
         success: true,
@@ -135,9 +163,13 @@ export class ScheduleController {
     }
   };
 
-  public getScheduleHistory = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  public getScheduleHistory = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> => {
     try {
-      const { id } = req.params;
+      const id = req.params.id ?? '';
       const limit = req.query.limit ? parseInt(req.query.limit as string, 10) : 50;
       const history = await this.service.getExecutionHistory(id, limit);
       res.status(200).json({

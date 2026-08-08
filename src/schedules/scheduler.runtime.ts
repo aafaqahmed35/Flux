@@ -1,7 +1,7 @@
-import { getRedisClient } from '../redis/redis';
-import { JobService } from '../services/job.service';
-import { logger } from '../utils/logger';
-import { CronEngine } from './cron.engine';
+import { redisClient } from '../redis/redis.js';
+import { JobService } from '../services/job.service.js';
+import appLogger from '../logger/logger.js';
+import { CronEngine } from './cron.engine.js';
 import {
   SCHEDULER_HEARTBEAT_INTERVAL_MS,
   SCHEDULER_LOCK_TTL_MS,
@@ -19,6 +19,7 @@ export class SchedulerRuntime implements ISchedulerRuntime {
 
   private running: boolean = false;
   private leader: boolean = false;
+  private isTicking: boolean = false;
 
   private pollTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
@@ -30,7 +31,8 @@ export class SchedulerRuntime implements ISchedulerRuntime {
 
   constructor(repository?: IScheduleRepository, jobService?: JobService, instanceId?: string) {
     this.instanceId =
-      instanceId || `scheduler-${Math.random().toString(36).substring(2, 9)}-${Date.now().toString(36)}`;
+      instanceId ||
+      `scheduler-${Math.random().toString(36).substring(2, 9)}-${Date.now().toString(36)}`;
     this.repository = repository || new ScheduleRepository();
     this.jobService = jobService || new JobService();
   }
@@ -59,37 +61,44 @@ export class SchedulerRuntime implements ISchedulerRuntime {
     if (this.running) return;
     this.running = true;
 
-    logger.info('Starting Scheduler Runtime', { instanceId: this.instanceId });
+    appLogger.info('Starting Scheduler Runtime', { instanceId: this.instanceId });
 
     // Step 1: Attempt initial Leader Lock acquisition
-    await this.acquireLeaderLock();
+    const acquired = await this.acquireLeaderLock();
 
-    // Start heartbeat timer to attempt acquiring or renewing leader lock periodically
-    this.heartbeatTimer = setInterval(async () => {
-      if (this.leader) {
-        await this.renewLeaderLock();
-      } else {
-        await this.acquireLeaderLock();
-      }
-    }, SCHEDULER_HEARTBEAT_INTERVAL_MS);
+    // Step 2: Start heartbeat timer
+    if (!this.heartbeatTimer) {
+      this.heartbeatTimer = setInterval(() => {
+        void this.heartbeatLoop();
+      }, SCHEDULER_HEARTBEAT_INTERVAL_MS);
+    }
 
-    // If acquired leader lock, execute recovery sequence before polling loop
-    if (this.leader) {
+    // Step 3: If leader lock acquired during start, run recovery & start polling
+    if (acquired) {
       await this.recoverOverdueSchedules();
       this.startPollingLoop();
+    }
+  }
+
+  private async heartbeatLoop(): Promise<void> {
+    if (!this.running) return;
+    if (this.leader) {
+      await this.renewLeaderLock();
+    } else {
+      const becameLeader = await this.acquireLeaderLock();
+      if (becameLeader && this.running) {
+        await this.recoverOverdueSchedules();
+        this.startPollingLoop();
+      }
     }
   }
 
   public async stop(): Promise<void> {
     if (!this.running) return;
 
-    logger.info('Stopping Scheduler Runtime', { instanceId: this.instanceId });
+    appLogger.info('Stopping Scheduler Runtime', { instanceId: this.instanceId });
     this.running = false;
-
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
+    this.stopPollingLoop();
 
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
@@ -97,15 +106,14 @@ export class SchedulerRuntime implements ISchedulerRuntime {
     }
 
     if (this.leader) {
-      await this.releaseLeaderLock();
       this.leader = false;
+      await this.releaseLeaderLock();
     }
   }
 
   private async acquireLeaderLock(): Promise<boolean> {
     try {
-      const redis = getRedisClient();
-      const acquired = await redis.set(
+      const acquired = await redisClient.set(
         SCHEDULER_REDIS_LOCK_KEY,
         this.instanceId,
         'PX',
@@ -118,14 +126,12 @@ export class SchedulerRuntime implements ISchedulerRuntime {
         this.leader = true;
 
         if (!wasLeader) {
-          logger.info('Scheduler acquired Leader Lock', { instanceId: this.instanceId });
-          await this.recoverOverdueSchedules();
-          this.startPollingLoop();
+          appLogger.info('Scheduler acquired Leader Lock', { instanceId: this.instanceId });
         }
         return true;
       }
     } catch (err) {
-      logger.error('Failed to attempt Leader Lock acquisition', { error: err });
+      appLogger.error('Failed to attempt Leader Lock acquisition', { error: err });
     }
 
     return false;
@@ -133,30 +139,33 @@ export class SchedulerRuntime implements ISchedulerRuntime {
 
   private async renewLeaderLock(): Promise<boolean> {
     try {
-      const redis = getRedisClient();
-      const currentLeader = await redis.get(SCHEDULER_REDIS_LOCK_KEY);
+      const currentLeader = await redisClient.get(SCHEDULER_REDIS_LOCK_KEY);
 
       if (currentLeader === this.instanceId) {
-        await redis.pexpire(SCHEDULER_REDIS_LOCK_KEY, SCHEDULER_LOCK_TTL_MS);
+        await redisClient.pexpire(SCHEDULER_REDIS_LOCK_KEY, SCHEDULER_LOCK_TTL_MS);
         return true;
       } else {
-        logger.warn('Scheduler lost Leader Lock to another instance', {
+        appLogger.warn('Scheduler lost Leader Lock to another instance', {
           instanceId: this.instanceId,
           currentLeader,
         });
-        this.leader = false;
-        this.stopPollingLoop();
+        this.handleLeadershipLoss();
         return false;
       }
     } catch (err) {
-      logger.error('Failed to renew Leader Lock', { error: err });
+      appLogger.error('Failed to renew Leader Lock', { error: err });
+      this.handleLeadershipLoss();
       return false;
     }
   }
 
+  private handleLeadershipLoss(): void {
+    this.leader = false;
+    this.stopPollingLoop();
+  }
+
   private async releaseLeaderLock(): Promise<void> {
     try {
-      const redis = getRedisClient();
       const script = `
         if redis.call("get", KEYS[1]) == ARGV[1] then
           return redis.call("del", KEYS[1])
@@ -164,19 +173,19 @@ export class SchedulerRuntime implements ISchedulerRuntime {
           return 0
         end
       `;
-      await redis.eval(script, 1, SCHEDULER_REDIS_LOCK_KEY, this.instanceId);
-      logger.info('Scheduler released Leader Lock', { instanceId: this.instanceId });
+      await redisClient.eval(script, 1, SCHEDULER_REDIS_LOCK_KEY, this.instanceId);
+      appLogger.info('Scheduler released Leader Lock', { instanceId: this.instanceId });
     } catch (err) {
-      logger.error('Failed to release Leader Lock', { error: err });
+      appLogger.error('Failed to release Leader Lock', { error: err });
     }
   }
 
   private startPollingLoop(): void {
     if (this.pollTimer) return;
 
-    this.pollTimer = setInterval(async () => {
+    this.pollTimer = setInterval(() => {
       if (this.running && this.leader) {
-        await this.tick();
+        void this.tick();
       }
     }, SCHEDULER_POLL_INTERVAL_MS);
   }
@@ -192,22 +201,25 @@ export class SchedulerRuntime implements ISchedulerRuntime {
    * Overdue Schedule Startup Recovery
    */
   public async recoverOverdueSchedules(): Promise<void> {
-    if (!this.leader) return;
+    if (!this.leader || !this.running) return;
 
     try {
-      logger.info('Performing overdue schedule startup recovery...', { instanceId: this.instanceId });
+      appLogger.info('Performing overdue schedule startup recovery...', {
+        instanceId: this.instanceId,
+      });
       const dueSchedules = await this.repository.findDueSchedules(100);
 
       if (dueSchedules.length > 0) {
-        logger.warn(`Found ${dueSchedules.length} overdue schedules during startup recovery`, {
+        appLogger.warn(`Found ${dueSchedules.length} overdue schedules during startup recovery`, {
           count: dueSchedules.length,
         });
         for (const schedule of dueSchedules) {
+          if (!this.leader || !this.running) break;
           await this.executeSchedule(schedule, true);
         }
       }
     } catch (err) {
-      logger.error('Error during scheduler startup recovery', { error: err });
+      appLogger.error('Error during scheduler startup recovery', { error: err });
     }
   }
 
@@ -215,8 +227,9 @@ export class SchedulerRuntime implements ISchedulerRuntime {
    * Periodic Tick Loop
    */
   public async tick(): Promise<void> {
-    if (!this.running || !this.leader) return;
+    if (!this.running || !this.leader || this.isTicking) return;
 
+    this.isTicking = true;
     this.lastTickTime = new Date();
     const tickStart = Date.now();
 
@@ -226,13 +239,16 @@ export class SchedulerRuntime implements ISchedulerRuntime {
 
       if (dueSchedules.length > 0) {
         for (const schedule of dueSchedules) {
+          if (!this.running || !this.leader) break;
           await this.executeSchedule(schedule, false);
         }
       }
 
       this.schedulerLagMs = Date.now() - tickStart;
     } catch (err) {
-      logger.error('Error during scheduler tick', { error: err });
+      appLogger.error('Error during scheduler tick', { error: err });
+    } finally {
+      this.isTicking = false;
     }
   }
 
@@ -241,7 +257,7 @@ export class SchedulerRuntime implements ISchedulerRuntime {
 
     try {
       // 1. Create background job in PostgreSQL + Redis
-      const job = await this.jobService.createJob({
+      const jobResponse = await this.jobService.createJob({
         name: schedule.name,
         queueName: schedule.queueName,
         payload: schedule.payload,
@@ -253,7 +269,9 @@ export class SchedulerRuntime implements ISchedulerRuntime {
         },
       });
 
-      // 2. Compute next execution timestamp
+      const jobId = jobResponse.job.id;
+
+      // 2. Compute next execution timestamp (guaranteed strictly > startedAt)
       const nextRunAt = CronEngine.getNextRun(schedule.cronExpression, {
         fromDate: startedAt,
         timezone: schedule.timezone,
@@ -266,7 +284,7 @@ export class SchedulerRuntime implements ISchedulerRuntime {
       const finishedAt = new Date();
       await this.repository.addExecutionRecord({
         scheduleId: schedule.id,
-        jobId: job.id,
+        jobId,
         status: 'SUCCESS',
         startedAt,
         finishedAt,
@@ -274,17 +292,17 @@ export class SchedulerRuntime implements ISchedulerRuntime {
         errorMessage: null,
       });
 
-      logger.info('Scheduled job enqueued successfully', {
+      appLogger.info('Scheduled job enqueued successfully', {
         scheduleId: schedule.id,
-        jobId: job.id,
+        jobId,
         nextRunAt: nextRunAt.toISOString(),
         isRecovery,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       const finishedAt = new Date();
-      const errorMessage = err?.message || 'Failed to enqueue scheduled job';
+      const errorMessage = err instanceof Error ? err.message : 'Failed to enqueue scheduled job';
 
-      logger.error('Failed to execute schedule', {
+      appLogger.error('Failed to execute schedule', {
         scheduleId: schedule.id,
         error: err,
       });
@@ -297,7 +315,9 @@ export class SchedulerRuntime implements ISchedulerRuntime {
         });
         await this.repository.updateNextRun(schedule.id, nextRunAt, startedAt);
       } catch (calcErr) {
-        logger.error('Failed to advance next_run_at after schedule execution failure', { calcErr });
+        appLogger.error('Failed to advance next_run_at after schedule execution failure', {
+          calcErr,
+        });
       }
 
       await this.repository.addExecutionRecord({
@@ -312,3 +332,5 @@ export class SchedulerRuntime implements ISchedulerRuntime {
     }
   }
 }
+
+export const schedulerRuntime = new SchedulerRuntime();
