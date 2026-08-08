@@ -1,0 +1,82 @@
+name: Flux CI / CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-and-build:
+    name: Build, Audit & Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: flux_db
+          POSTGRES_USER: flux_user
+          POSTGRES_PASSWORD: flux_password
+        ports:
+          - 15433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 16379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run Database Migrations
+        run: npm run migrate
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 15433
+          POSTGRES_DB: flux_db
+          POSTGRES_USER: flux_user
+          POSTGRES_PASSWORD: flux_password
+
+      - name: TypeScript Build
+        run: npm run build
+
+      - name: ESLint Code Quality
+        run: npm run lint
+
+      - name: Prettier Code Formatting Check
+        run: npm run format:check
+
+      - name: Run Full Jest Suite
+        run: npm test -- --runInBand
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 15433
+          POSTGRES_DB: flux_db
+          POSTGRES_USER: flux_user
+          POSTGRES_PASSWORD: flux_password
+          REDIS_HOST: localhost
+          REDIS_PORT: 16379
+
+      - name: Build Production Docker Image
+        run: docker build -t flux:latest .

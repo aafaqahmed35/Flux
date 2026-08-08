@@ -1,27 +1,27 @@
 services:
   flux-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: flux:latest
     container_name: flux-api
-    restart: unless-stopped
+    restart: always
     command: npm run start:api
     ports:
       - "${PORT:-18082}:3000"
     environment:
-      - NODE_ENV=development
+      - NODE_ENV=production
       - PORT=3000
       - APP_NAME=Flux
       - APP_VERSION=1.0.0
       - LOG_LEVEL=info
       - POSTGRES_HOST=flux-postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_DB=${POSTGRES_DB:-flux_db}
-      - POSTGRES_USER=${POSTGRES_USER:-flux_user}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-flux_password}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - REDIS_HOST=flux-redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - AUTH_ENABLED=true
+      - JWT_SECRET=${JWT_SECRET}
       - OTEL_SERVICE_NAME=flux-api
     networks:
       - flux-network
@@ -35,26 +35,29 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
 
   flux-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: flux:latest
     container_name: flux-worker
-    restart: unless-stopped
+    restart: always
     command: npm run start:worker
     environment:
-      - NODE_ENV=development
+      - NODE_ENV=production
       - LOG_LEVEL=info
       - POSTGRES_HOST=flux-postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_DB=${POSTGRES_DB:-flux_db}
-      - POSTGRES_USER=${POSTGRES_USER:-flux_user}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-flux_password}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - REDIS_HOST=flux-redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-      - WORKER_CONCURRENCY=5
+      - WORKER_CONCURRENCY=10
       - OTEL_SERVICE_NAME=flux-worker
     networks:
       - flux-network
@@ -63,22 +66,25 @@ services:
         condition: service_healthy
       flux-redis:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1024M
 
   flux-scheduler:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: flux:latest
     container_name: flux-scheduler
-    restart: unless-stopped
+    restart: always
     command: npm run start:scheduler
     environment:
-      - NODE_ENV=development
+      - NODE_ENV=production
       - LOG_LEVEL=info
       - POSTGRES_HOST=flux-postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_DB=${POSTGRES_DB:-flux_db}
-      - POSTGRES_USER=${POSTGRES_USER:-flux_user}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-flux_password}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - REDIS_HOST=flux-redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
@@ -91,23 +97,26 @@ services:
         condition: service_healthy
       flux-redis:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
 
   flux-postgres:
     image: postgres:16-alpine
     container_name: flux-postgres
-    restart: unless-stopped
-    ports:
-      - "${POSTGRES_PORT:-15433}:5432"
+    restart: always
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-flux_db}
-      POSTGRES_USER: ${POSTGRES_USER:-flux_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flux_password}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - flux-postgres-data:/var/lib/postgresql/data
     networks:
       - flux-network
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-flux_user} -d ${POSTGRES_DB:-flux_db}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -115,9 +124,8 @@ services:
   flux-redis:
     image: redis:7-alpine
     container_name: flux-redis
-    restart: unless-stopped
-    ports:
-      - "${REDIS_PORT:-16379}:6379"
+    restart: always
+    command: redis-server --appendonly yes
     volumes:
       - flux-redis-data:/data
     networks:
@@ -128,26 +136,12 @@ services:
       timeout: 5s
       retries: 5
 
-  flux-adminer:
-    image: adminer:latest
-    container_name: flux-adminer
-    restart: unless-stopped
-    ports:
-      - "${ADMINER_PORT:-18086}:8080"
-    environment:
-      ADMINER_DEFAULT_SERVER: flux-postgres
-    networks:
-      - flux-network
-    depends_on:
-      flux-postgres:
-        condition: service_healthy
-
 networks:
   flux-network:
-    name: flux_network
+    name: flux_network_prod
 
 volumes:
   flux-postgres-data:
-    name: flux_postgres_data
+    name: flux_postgres_data_prod
   flux-redis-data:
-    name: flux_redis_data
+    name: flux_redis_data_prod

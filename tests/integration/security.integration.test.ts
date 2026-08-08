@@ -24,7 +24,11 @@ describe('Security & RBAC Integration Tests', () => {
 
     await authService.createUser('admin@test-security.com', 'AdminPass123!', 'ADMIN');
     const operator = await authService.createUser('op@test-security.com', 'OpPass123!', 'OPERATOR');
-    const viewer = await authService.createUser('viewer@test-security.com', 'ViewPass123!', 'VIEWER');
+    const viewer = await authService.createUser(
+      'viewer@test-security.com',
+      'ViewPass123!',
+      'VIEWER',
+    );
 
     operatorUserId = operator.id;
 
@@ -85,9 +89,7 @@ describe('Security & RBAC Integration Tests', () => {
       name: 'Integration Test Key',
     });
 
-    const res = await request(app)
-      .get('/api/v1/jobs')
-      .set('X-API-Key', rawKey);
+    const res = await request(app).get('/api/v1/jobs').set('X-API-Key', rawKey);
 
     const body = res.body as ApiResponse;
     expect(res.status).toBe(200);

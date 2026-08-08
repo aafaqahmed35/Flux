@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js",
+    "start": "node dist/runtime/api.js",
+    "start:api": "node dist/runtime/api.js",
+    "start:worker": "node dist/runtime/worker.js",
+    "start:scheduler": "node dist/runtime/scheduler.js",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
     "lint:fix": "eslint \"src/**/*.ts\" \"tests/**/*.ts\" --fix",
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"README.md\"",

@@ -27,6 +27,55 @@ const parseRedisInfo = (infoRaw: string): Record<string, string> => {
   return result;
 };
 
+// Process liveness check (Fast check without external dependencies)
+export const getLiveness = asyncHandler((_req: Request, res: Response): Promise<void> => {
+  res.status(HTTP_STATUS.OK).json({
+    status: 'UP',
+    service: serverConfig.appName,
+    version: serverConfig.appVersion,
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
+  return Promise.resolve();
+});
+
+// Dependency readiness check (Verifies PostgreSQL + Redis connectivity)
+export const getReadiness = asyncHandler(async (_req: Request, res: Response): Promise<void> => {
+  let dbStatus = 'DOWN';
+  try {
+    await pgPool.query('SELECT 1');
+    dbStatus = 'UP';
+  } catch {
+    dbStatus = 'DOWN';
+  }
+
+  let redisStatus = 'DOWN';
+  try {
+    if (redisClient.status !== 'ready' && redisClient.status !== 'connecting') {
+      await redisClient.connect();
+    }
+    const pong = await redisClient.ping();
+    if (pong === 'PONG') {
+      redisStatus = 'UP';
+    }
+  } catch {
+    redisStatus = 'DOWN';
+  }
+
+  const isReady = dbStatus === 'UP' && redisStatus === 'UP';
+  const statusCode = isReady ? HTTP_STATUS.OK : HTTP_STATUS.SERVICE_UNAVAILABLE;
+
+  res.status(statusCode).json({
+    status: isReady ? 'UP' : 'DOWN',
+    service: serverConfig.appName,
+    timestamp: new Date().toISOString(),
+    components: {
+      database: dbStatus,
+      redis: redisStatus,
+    },
+  });
+});
+
 export const getHealth = asyncHandler(async (_req: Request, res: Response): Promise<void> => {
   let dbStatus = 'DOWN';
   let dbLatencyMs = -1;

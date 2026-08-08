@@ -1,34 +1,38 @@
-# Multi-Stage Dockerfile for Flux Backend Service
-
-# Stage 1: Dependencies & Build
-FROM node:20-alpine AS builder
-
+# Stage 1 — Dependencies
+FROM node:20-alpine AS deps
 WORKDIR /app
-
-COPY package*.json tsconfig.json ./
-
+COPY package*.json ./
 RUN npm ci
 
+# Stage 2 — Builder
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+COPY --from=deps /app/node_modules ./node_modules
+COPY tsconfig.json ./
 COPY src ./src
-
+COPY scripts ./scripts
 RUN npm run build
 
-# Stage 2: Production Runtime
+# Stage 3 — Production Runner
 FROM node:20-alpine AS runner
-
 WORKDIR /app
 
 ENV NODE_ENV=production
+ENV PORT=3000
 
+# Install curl for healthchecks
+RUN apk add --no-cache curl
+
+# Copy production dependencies and compiled code
 COPY package*.json ./
-
-RUN npm ci --only=production
+RUN npm ci --only=production && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
 
-# Use non-root user for enhanced security
+# Run as non-root node user
 USER node
 
 EXPOSE 3000
 
-CMD ["node", "dist/server.js"]
+CMD ["npm", "run", "start:api"]

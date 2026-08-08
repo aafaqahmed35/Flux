@@ -111,3 +111,5 @@ export class WorkerManager {
     process.once('SIGTERM', () => void shutdownHandler('SIGTERM'));
   }
 }
+
+export const workerManager = new WorkerManager();
