@@ -22,6 +22,10 @@ import { retryEngine } from '../retry/retry.engine.js';
 import { RetryMetricsResponse } from '../retry/retry.types.js';
 import { IJobService, ListJobsQueryOptions } from './job.service.interface.js';
 
+import { prometheusRegistry } from '../observability/prometheus.js';
+import { tracingHelper } from '../observability/tracing.js';
+import { METRIC_NAMES } from '../observability/observability.constants.js';
+
 export class JobService implements IJobService {
   private readonly repository: IJobRepository;
   private readonly queueService: QueueService;
@@ -38,11 +42,22 @@ export class JobService implements IJobService {
     dto: CreateJobRequestDTO,
     idempotencyHeader?: string,
   ): Promise<CreateJobResponseDTO> {
+    const span = tracingHelper.startSpan('flux.job.create', {
+      'job.name': dto.name,
+      'job.queue': dto.queueName,
+      'job.priority': dto.priority || 'NORMAL',
+    });
+
     const idempotencyKey = idempotencyHeader || dto.idempotencyKey || null;
 
     if (idempotencyKey) {
       const existing = await this.repository.findByIdempotencyKey(dto.queueName, idempotencyKey);
       if (existing) {
+        prometheusRegistry.incrementCounter(METRIC_NAMES.JOB_IDEMPOTENCY_HITS_TOTAL, 1, {
+          queue: dto.queueName,
+        });
+        tracingHelper.addEvent(span, 'idempotency_hit', { 'job.id': existing.id });
+        tracingHelper.endSpan(span);
         appLogger.info('Idempotent request matched existing job', {
           jobId: existing.id,
           queueName: dto.queueName,
@@ -54,6 +69,11 @@ export class JobService implements IJobService {
         };
       }
     }
+
+    prometheusRegistry.incrementCounter(METRIC_NAMES.JOBS_CREATED_TOTAL, 1, {
+      queue: dto.queueName,
+      priority: dto.priority || 'NORMAL',
+    });
 
     // 1. Insert job into PostgreSQL (status: PENDING or DELAYED)
     const job = await this.repository.createJob({
@@ -176,6 +196,10 @@ export class JobService implements IJobService {
     // Also remove from Redis transport if present
     await this.queueService.remove(existing.queueName, id).catch(() => {});
 
+    prometheusRegistry.incrementCounter(METRIC_NAMES.JOBS_CANCELLED_TOTAL, 1, {
+      queue: existing.queueName,
+    });
+
     appLogger.info('Job cancelled via service layer', {
       jobId: id,
       previousStatus: existing.status,
@@ -205,6 +229,10 @@ export class JobService implements IJobService {
 
     // Remove from Redis transport if present
     await this.queueService.remove(existing.queueName, id).catch(() => {});
+
+    prometheusRegistry.incrementCounter(METRIC_NAMES.JOBS_DELETED_TOTAL, 1, {
+      queue: existing.queueName,
+    });
 
     appLogger.info('Job soft-deleted via service layer', { jobId: id });
 

@@ -11,6 +11,9 @@ import {
 import { IScheduleRepository, ISchedulerRuntime } from './schedule.interface';
 import { ScheduleRepository } from './schedule.repository';
 import { Schedule, SchedulerHealthMetrics } from './schedule.types';
+import { prometheusRegistry } from '../observability/prometheus.js';
+import { tracingHelper } from '../observability/tracing.js';
+import { METRIC_NAMES } from '../observability/observability.constants.js';
 
 export class SchedulerRuntime implements ISchedulerRuntime {
   private readonly instanceId: string;
@@ -233,6 +236,12 @@ export class SchedulerRuntime implements ISchedulerRuntime {
     this.lastTickTime = new Date();
     const tickStart = Date.now();
 
+    prometheusRegistry.incrementCounter(METRIC_NAMES.SCHEDULER_TICKS_TOTAL);
+    const span = tracingHelper.startSpan('flux.scheduler.tick', {
+      'scheduler.instance': this.instanceId,
+      'scheduler.leader': this.leader,
+    });
+
     try {
       const dueSchedules = await this.repository.findDueSchedules(50);
       this.dueSchedulesCount = dueSchedules.length;
@@ -245,7 +254,12 @@ export class SchedulerRuntime implements ISchedulerRuntime {
       }
 
       this.schedulerLagMs = Date.now() - tickStart;
+      prometheusRegistry.setGauge(METRIC_NAMES.SCHEDULER_LAG_MS, this.schedulerLagMs);
+      tracingHelper.endSpan(span, 'OK');
     } catch (err) {
+      prometheusRegistry.incrementCounter(METRIC_NAMES.SCHEDULER_FAILURES_TOTAL);
+      tracingHelper.recordException(span, err instanceof Error ? err : String(err));
+      tracingHelper.endSpan(span, 'ERROR');
       appLogger.error('Error during scheduler tick', { error: err });
     } finally {
       this.isTicking = false;

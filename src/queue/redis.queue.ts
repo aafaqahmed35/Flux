@@ -9,6 +9,9 @@ import { IQueueEngine } from './queue.interface.js';
 import { QueueKeyFactory } from './queue.key.js';
 import { EnqueueResult, QueueMetrics } from './queue.types.js';
 
+import { prometheusRegistry } from '../observability/prometheus.js';
+import { METRIC_NAMES } from '../observability/observability.constants.js';
+
 export class RedisQueue implements IQueueEngine {
   private readonly client: Redis;
 
@@ -43,6 +46,10 @@ export class RedisQueue implements IQueueEngine {
 
       const rtt = Date.now() - start;
       appLogger.info('Enqueue Success', { jobId, queueName, rttMs: rtt });
+
+      prometheusRegistry.incrementCounter(METRIC_NAMES.QUEUE_ENQUEUED_TOTAL, 1, {
+        queue: queueName,
+      });
 
       return {
         jobId,
@@ -82,6 +89,10 @@ export class RedisQueue implements IQueueEngine {
       const rtt = Date.now() - start;
       appLogger.info('Batch Enqueue Success', { count: jobIds.length, queueName, rttMs: rtt });
 
+      prometheusRegistry.incrementCounter(METRIC_NAMES.QUEUE_ENQUEUED_TOTAL, jobIds.length, {
+        queue: queueName,
+      });
+
       const now = new Date();
       return jobIds.map((jobId) => ({
         jobId,
@@ -110,6 +121,9 @@ export class RedisQueue implements IQueueEngine {
       }
 
       if (jobId) {
+        prometheusRegistry.incrementCounter(METRIC_NAMES.QUEUE_CLAIMED_TOTAL, 1, {
+          queue: queueName,
+        });
         appLogger.info('Job Claimed from Redis', { jobId, queueName, sourceKey, destKey });
       }
 
@@ -125,6 +139,9 @@ export class RedisQueue implements IQueueEngine {
     await this.ensureConnected();
     const destKey = QueueKeyFactory.processing(queueName);
     await this.client.lrem(destKey, 0, jobId);
+    prometheusRegistry.incrementCounter(METRIC_NAMES.QUEUE_ACKNOWLEDGED_TOTAL, 1, {
+      queue: queueName,
+    });
     appLogger.info('Job Acknowledged & Removed from Processing', { jobId, queueName, destKey });
   }
 
@@ -253,6 +270,12 @@ export class RedisQueue implements IQueueEngine {
     const scheduledCount = await this.client.zcard(QueueKeyFactory.scheduled());
     const deadletterCount = await jobRepository.count({ status: JobStatus.DEAD_LETTER });
     const activeWorkers = await this.client.hlen(QueueKeyFactory.workers());
+
+    const labels: Record<string, string> = targetQueueName ? { queue: targetQueueName } : {};
+    prometheusRegistry.setGauge(METRIC_NAMES.QUEUE_DEPTH, queuedCount, labels);
+    prometheusRegistry.setGauge(METRIC_NAMES.QUEUE_PROCESSING, processingCount, labels);
+    prometheusRegistry.setGauge(METRIC_NAMES.QUEUE_SCHEDULED, scheduledCount);
+    prometheusRegistry.setGauge(METRIC_NAMES.QUEUE_DEADLETTER, deadletterCount);
 
     return {
       pending: pendingCount,

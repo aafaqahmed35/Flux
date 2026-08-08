@@ -8,6 +8,8 @@ import { env } from './config/env.js';
 import { checkPostgresConnection, closePostgresConnection } from './database/postgres.js';
 import { checkRedisConnection, closeRedisConnection } from './redis/redis.js';
 
+import { openTelemetryManager } from './observability/opentelemetry.js';
+
 let server: Server;
 
 const startServer = async (): Promise<void> => {
@@ -15,6 +17,9 @@ const startServer = async (): Promise<void> => {
     appLogger.info(
       `Bootstrapping ${serverConfig.appName} v${serverConfig.appVersion} [${serverConfig.env}]...`,
     );
+
+    // Initialize OpenTelemetry
+    await openTelemetryManager.start();
 
     // Verify PostgreSQL and Redis infrastructure connectivity on boot (non-blocking for dev flexibility)
     const isPgConnected = await checkPostgresConnection();
@@ -80,6 +85,7 @@ const gracefulShutdown = async (signal: string): Promise<void> => {
     server.close(() => {
       void (async (): Promise<void> => {
         appLogger.info('HTTP server closed.');
+        await openTelemetryManager.shutdown();
         await closePostgresConnection();
         await closeRedisConnection();
         appLogger.info('All connections terminated. Exiting process.');
@@ -93,6 +99,7 @@ const gracefulShutdown = async (signal: string): Promise<void> => {
       process.exit(1);
     }, 10000).unref();
   } else {
+    await openTelemetryManager.shutdown();
     await closePostgresConnection();
     await closeRedisConnection();
     process.exit(0);

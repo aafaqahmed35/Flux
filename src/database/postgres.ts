@@ -1,6 +1,8 @@
 import pg from 'pg';
 import { databaseConfig } from '../config/database.js';
 import { appLogger, errorLogger } from '../logger/logger.js';
+import { prometheusRegistry } from '../observability/prometheus.js';
+import { METRIC_NAMES } from '../observability/observability.constants.js';
 
 const { Pool } = pg;
 
@@ -38,6 +40,16 @@ export const checkPostgresConnection = async (): Promise<boolean> => {
       },
     );
     return false;
+  }
+};
+
+export const recordPostgresPoolMetrics = (): void => {
+  try {
+    prometheusRegistry.setGauge(METRIC_NAMES.DB_POOL_ACTIVE, pgPool.totalCount - pgPool.idleCount);
+    prometheusRegistry.setGauge(METRIC_NAMES.DB_POOL_IDLE, pgPool.idleCount);
+    prometheusRegistry.setGauge(METRIC_NAMES.DB_POOL_WAITING, pgPool.waitingCount);
+  } catch {
+    // Ignore metric collection errors
   }
 };
 

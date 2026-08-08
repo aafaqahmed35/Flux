@@ -8,6 +8,10 @@ import { RETRY_DEFAULTS, RetryStrategy } from './retry.constants.js';
 import { IRetryEngine } from './retry.interface.js';
 import { RetryDecision, RetryMetricsResponse, RetryPolicy } from './retry.types.js';
 
+import { prometheusRegistry } from '../observability/prometheus.js';
+import { tracingHelper } from '../observability/tracing.js';
+import { METRIC_NAMES } from '../observability/observability.constants.js';
+
 export class RetryEngine implements IRetryEngine {
   private retryAttemptsTotal = 0;
   private retryFailureTotal = 0;
@@ -111,16 +115,34 @@ export class RetryEngine implements IRetryEngine {
     const delayMs = this.calculateDelay(job, policyOverrides);
     const nextRetryAt = new Date(Date.now() + delayMs);
     const attempt = job.retryCount + 1;
+    const strategy = job.retryStrategy || RetryStrategy.EXPONENTIAL_WITH_JITTER;
 
     this.retryAttemptsTotal++;
     this.totalDelayMs += delayMs;
+
+    const span = tracingHelper.startSpan('flux.job.retry', {
+      'job.id': job.id,
+      'job.queue': job.queueName,
+      'job.attempt': attempt,
+      'retry.delay_ms': delayMs,
+      'retry.strategy': strategy,
+    });
+
+    prometheusRegistry.incrementCounter(METRIC_NAMES.JOBS_RETRIED_TOTAL, 1, {
+      queue: job.queueName,
+      strategy,
+    });
+    prometheusRegistry.recordHistogram(METRIC_NAMES.JOB_RETRY_DELAY_MS, delayMs, {
+      queue: job.queueName,
+      strategy,
+    });
 
     try {
       // 1. Record relational history entry
       await jobRepository.addRetryHistoryRecord({
         jobId: job.id,
         attempt,
-        strategy: job.retryStrategy || RetryStrategy.EXPONENTIAL_WITH_JITTER,
+        strategy,
         delayMs,
         scheduledAt: nextRetryAt,
         startedAt: job.startedAt,
@@ -148,6 +170,8 @@ export class RetryEngine implements IRetryEngine {
       // 4. Acknowledge and remove from active processing queue in Redis
       await redisQueue.ackJob(job.queueName, job.id);
 
+      tracingHelper.endSpan(span, 'OK');
+
       appLogger.info('Job successfully scheduled for retry', {
         jobId: job.id,
         attempt,
@@ -162,6 +186,8 @@ export class RetryEngine implements IRetryEngine {
       };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      tracingHelper.recordException(span, msg);
+      tracingHelper.endSpan(span, 'ERROR', msg);
       errorLogger.error('Failed to schedule job retry', { jobId: job.id, error: msg });
       throw err;
     }
@@ -171,6 +197,17 @@ export class RetryEngine implements IRetryEngine {
     const attempt = job.retryCount + 1;
     this.deadLetterTotal++;
     this.retryFailureTotal++;
+
+    const span = tracingHelper.startSpan('flux.job.dead_letter', {
+      'job.id': job.id,
+      'job.queue': job.queueName,
+      'job.attempt': attempt,
+      'error.message': error.message,
+    });
+
+    prometheusRegistry.incrementCounter(METRIC_NAMES.JOBS_DEAD_LETTERED_TOTAL, 1, {
+      queue: job.queueName,
+    });
 
     // 1. Record history entry
     await jobRepository.addRetryHistoryRecord({
@@ -201,6 +238,8 @@ export class RetryEngine implements IRetryEngine {
 
     // 4. Ack job in processing list
     await redisQueue.ackJob(job.queueName, job.id);
+
+    tracingHelper.endSpan(span, 'OK');
 
     appLogger.info('Job moved to Dead Letter Queue (DLQ)', {
       jobId: job.id,

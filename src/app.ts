@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { requestLoggerMiddleware } from './middleware/requestLogger.middleware.js';
 import { correlationIdMiddleware } from './middleware/correlationId.middleware.js';
+import { metricsMiddleware } from './middleware/metrics.middleware.js';
 import { notFoundMiddleware } from './middleware/notFound.middleware.js';
 import { errorMiddleware } from './middleware/error.middleware.js';
 import { appRouter } from './routes/index.js';
@@ -12,6 +13,7 @@ const app: Express = express();
 
 // Correlation ID & Security Middlewares
 app.use(correlationIdMiddleware);
+app.use(metricsMiddleware);
 app.use(helmet());
 app.use(cors());
 

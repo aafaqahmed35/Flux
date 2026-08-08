@@ -4,6 +4,7 @@ export interface ExecutionContext {
   jobId: string;
   jobName: string;
   traceId: string;
+  spanId?: string;
   correlationId: string;
   workerId: string;
   queueName: string;

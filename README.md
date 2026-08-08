@@ -58,16 +58,25 @@ _Note: Container internal networking remains standard (`3000`, `5432`, `6379`, `
 
 ---
 
-## 🗺️ System Roadmap
+- [x] **Phase 1: Foundation & Infrastructure Bootstrap**
+- [x] **Phase 2: Job Domain Models & Persistence Layer**
+- [x] **Phase 3: Redis-Backed Queue Engine & Task Enqueuing**
+- [x] **Phase 4: Multi-Threaded Worker Process Execution**
+- [x] **Phase 5: Automated Retry Mechanisms & Exponential Backoff**
+- [x] **Phase 6: Cron & Deferred Task Scheduling**
+- [x] **Phase 7: Dead Letter Queue (DLQ) & Failure Recovery**
+- [x] **Phase 8: Job Metrics, OpenTelemetry & Observability**
 
-- [x] **Phase 1: Foundation & Infrastructure Bootstrap** _(Current)_
-- [ ] **Phase 2: Job Domain Models & Persistence Layer**
-- [ ] **Phase 3: Redis-Backed Queue Engine & Task Enqueuing**
-- [ ] **Phase 4: Multi-Threaded Worker Process Execution**
-- [ ] **Phase 5: Automated Retry Mechanisms & Exponential Backoff**
-- [ ] **Phase 6: Cron & Deferred Task Scheduling**
-- [ ] **Phase 7: Dead Letter Queue (DLQ) & Failure Recovery**
-- [ ] **Phase 8: Job Metrics, Analytics & Dashboard API**
+---
+
+## 📊 Observability & Telemetry
+
+Flux provides production-grade observability endpoints:
+
+- **Health Check & Diagnostics**: `GET /health`
+- **Prometheus Metrics**: `GET /metrics`
+- **OpenTelemetry Tracing**: Automatic HTTP/Express/DB/Redis instrumentation with OTLP exporter support
+- **Architecture Documentation**: [docs/observability.md](docs/observability.md)
 
 ---
 

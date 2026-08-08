@@ -12,6 +12,9 @@ import { ConcurrencyLimiter } from './concurrency.limiter.js';
 import { WORKER_DEFAULTS } from './worker.constants.js';
 import { WorkerOptions, WorkerStatus } from './worker.types.js';
 import { workerRegistry } from './worker.registry.js';
+import { prometheusRegistry } from '../observability/prometheus.js';
+import { tracingHelper } from '../observability/tracing.js';
+import { METRIC_NAMES } from '../observability/observability.constants.js';
 
 export class WorkerRuntime {
   readonly workerId: string;
@@ -73,6 +76,11 @@ export class WorkerRuntime {
     );
     await workerRegistry.registerWorker(info);
 
+    const labels = { workerId: this.workerId, queue: this.queues[0] || 'default' };
+    prometheusRegistry.setGauge(METRIC_NAMES.WORKER_ACTIVE, 1, labels);
+    prometheusRegistry.setGauge(METRIC_NAMES.WORKER_BUSY, 0, labels);
+    prometheusRegistry.setGauge(METRIC_NAMES.WORKER_CONCURRENCY, this.concurrency, labels);
+
     appLogger.info('Worker Runtime started', {
       workerId: this.workerId,
       queues: this.queues,
@@ -103,6 +111,10 @@ export class WorkerRuntime {
     }
 
     await workerRegistry.deregisterWorker(this.workerId);
+
+    const labels = { workerId: this.workerId, queue: this.queues[0] || 'default' };
+    prometheusRegistry.setGauge(METRIC_NAMES.WORKER_ACTIVE, 0, labels);
+    prometheusRegistry.setGauge(METRIC_NAMES.WORKER_BUSY, 0, labels);
 
     appLogger.info('Worker Runtime stopped cleanly', { workerId: this.workerId });
   }
@@ -194,11 +206,42 @@ export class WorkerRuntime {
       logger: appLogger,
     };
 
+    const queueWaitMs = Math.max(
+      0,
+      context.startedAt.getTime() - new Date(runningJob.createdAt).getTime(),
+    );
+    prometheusRegistry.recordHistogram(METRIC_NAMES.JOB_QUEUE_WAIT_DURATION_MS, queueWaitMs, {
+      queue: queueName,
+    });
+
+    const span = tracingHelper.startSpan('flux.worker.process', {
+      'job.id': runningJob.id,
+      'job.name': runningJob.name,
+      'job.queue': queueName,
+      'job.attempt': context.attempt,
+      'worker.id': this.workerId,
+    });
+
     // 4. Delegate execution to Execution Engine
     const result = await this.executionEngine.execute(runningJob, context);
 
     // 5. Update PostgreSQL state and acknowledge Redis job
     if (result.success) {
+      prometheusRegistry.incrementCounter(METRIC_NAMES.JOBS_COMPLETED_TOTAL, 1, {
+        queue: queueName,
+      });
+      prometheusRegistry.recordHistogram(METRIC_NAMES.WORKER_JOB_DURATION_MS, result.durationMs, {
+        queue: queueName,
+        status: 'COMPLETED',
+      });
+      prometheusRegistry.recordHistogram(
+        METRIC_NAMES.JOB_EXECUTION_DURATION_MS,
+        result.durationMs,
+        { queue: queueName, status: 'COMPLETED' },
+      );
+
+      tracingHelper.endSpan(span, 'OK');
+
       await this.repository.updateStatus(jobId, JobStatus.COMPLETED, {
         completedAt: new Date(),
         executionTimeMs: result.durationMs,
@@ -207,6 +250,23 @@ export class WorkerRuntime {
       appLogger.info('Job Execution Success Persisted', { jobId, durationMs: result.durationMs });
     } else {
       const error = result.error || new Error('Processor execution error');
+      prometheusRegistry.incrementCounter(METRIC_NAMES.JOBS_FAILED_TOTAL, 1, {
+        queue: queueName,
+        failure_type: error.name || 'Error',
+      });
+      prometheusRegistry.recordHistogram(METRIC_NAMES.WORKER_JOB_DURATION_MS, result.durationMs, {
+        queue: queueName,
+        status: 'FAILED',
+      });
+      prometheusRegistry.recordHistogram(
+        METRIC_NAMES.JOB_EXECUTION_DURATION_MS,
+        result.durationMs,
+        { queue: queueName, status: 'FAILED' },
+      );
+
+      tracingHelper.recordException(span, error);
+      tracingHelper.endSpan(span, 'ERROR', error.message);
+
       await retryEngine.scheduleRetry(runningJob, error);
       errorLogger.error('Job Execution Failure Handled by Retry Engine', {
         jobId,

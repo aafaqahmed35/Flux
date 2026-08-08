@@ -10,6 +10,8 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { processorRegistry } from '../workers/processor.registry.js';
 import { workerRegistry } from '../workers/worker.registry.js';
 import { schedulerRuntime } from '../schedules/scheduler.runtime.js';
+import { prometheusRegistry } from '../observability/prometheus.js';
+import { openTelemetryManager } from '../observability/opentelemetry.js';
 
 const parseRedisInfo = (infoRaw: string): Record<string, string> => {
   const result: Record<string, string> = {};
@@ -220,6 +222,13 @@ export const getHealth = asyncHandler(async (_req: Request, res: Response): Prom
       retry: retryMetrics,
       workers: workerMetrics,
       scheduler: schedulerMetrics,
+      observability: {
+        metrics: prometheusRegistry.isEnabled(),
+        tracing: openTelemetryManager.isRunning(),
+        serviceName: process.env.OTEL_SERVICE_NAME || 'flux',
+        version: serverConfig.appVersion,
+        traceExporter: process.env.OTEL_TRACES_EXPORTER || 'otlp',
+      },
     },
   };
 
