@@ -71,6 +71,7 @@ Flux avoids common host ports (`3000`, `5000`, `5432`, `6379`, `8080`) to elimin
 
 ## 📚 Platform Documentation
 
+- **[Operational Control Plane & Flow View](docs/ui.md)**: Web dashboard UI served at `/dashboard` with animated Flow View visualizer.
 - **[Vercel Serverless Deployment Guide](docs/vercel.md)**: Deploying Flux API on Vercel and configuring persistent background runtimes.
 - **[Distributed Recovery Specifications](docs/recovery.md)**: Fault-tolerance, atomic SQL transitions, and queue reconciliation primitives.
 - **[Performance & Load Engineering](docs/performance.md)**: Benchmark specifications, concurrency tuning, and zero lost jobs empirical results.

@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Flux ⚡ Operational Control Plane</title>
+  <link rel="stylesheet" href="/dashboard/styles.css">
+</head>
+<body>
+  <!-- AUTH MODAL -->
+  <div id="auth-modal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="brand">
+          <span class="logo-icon">⚡</span>
+          <h2>Flux Control Plane</h2>
+        </div>
+        <p class="subtitle">Authenticate to access operational management APIs</p>
+      </div>
+      <form id="login-form">
+        <div class="form-group">
+          <label for="auth-type">Authentication Method</label>
+          <select id="auth-type">
+            <option value="jwt">User Login (JWT Token)</option>
+            <option value="apikey">API Key Authentication</option>
+          </select>
+        </div>
+        <div id="jwt-fields">
+          <div class="form-group">
+            <label for="username">Username / Email</label>
+            <input type="text" id="username" placeholder="admin@flux.internal" value="admin@flux.internal">
+          </div>
+          <div class="form-group">
+            <label for="password">Password</label>
+            <input type="password" id="password" placeholder="••••••••" value="admin123">
+          </div>
+        </div>
+        <div id="apikey-fields" class="hidden">
+          <div class="form-group">
+            <label for="api-key-input">API Secret Key</label>
+            <input type="password" id="api-key-input" placeholder="flux_live_...">
+          </div>
+        </div>
+        <div id="auth-error" class="error-msg hidden"></div>
+        <button type="submit" class="btn btn-primary btn-block">Authenticate & Access Dashboard</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- CREATE JOB MODAL -->
+  <div id="job-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Create New Job</h3>
+        <button class="close-btn" id="close-job-modal">&times;</button>
+      </div>
+      <form id="create-job-form">
+        <div class="form-group">
+          <label for="job-name">Job Name / Task Type</label>
+          <input type="text" id="job-name" required placeholder="e.g. process-email-batch">
+        </div>
+        <div class="form-group">
+          <label for="job-queue">Target Queue</label>
+          <input type="text" id="job-queue" required value="default">
+        </div>
+        <div class="form-group">
+          <label for="job-priority">Priority</label>
+          <select id="job-priority">
+            <option value="NORMAL">NORMAL</option>
+            <option value="HIGH">HIGH</option>
+            <option value="LOW">LOW</option>
+            <option value="CRITICAL">CRITICAL</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="job-payload">JSON Payload</label>
+          <textarea id="job-payload" rows="3">{"timestamp": 1700000000, "action": "benchmark"}</textarea>
+        </div>
+        <button type="submit" class="btn btn-primary btn-block">Enqueue Job to Transport</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- DASHBOARD SHELL -->
+  <div id="app-shell">
+    <!-- TOP HEADER NAVBAR -->
+    <header class="top-nav">
+      <div class="nav-left">
+        <div class="brand">
+          <span class="logo-icon">⚡</span>
+          <span class="brand-name">FLUX</span>
+          <span class="version-badge">v1.0.0</span>
+        </div>
+        <div class="status-indicator">
+          <span class="pulse-dot green"></span>
+          <span id="system-status-text">OPERATIONAL</span>
+        </div>
+      </div>
+      <div class="nav-center">
+        <nav class="tab-nav">
+          <button class="nav-tab active" data-tab="overview">Overview</button>
+          <button class="nav-tab hero-tab" data-tab="flow">Flow View ⭐</button>
+          <button class="nav-tab" data-tab="jobs">Jobs</button>
+          <button class="nav-tab" data-tab="queues">Queues</button>
+          <button class="nav-tab" data-tab="workers">Workers</button>
+          <button class="nav-tab" data-tab="schedules">Schedules</button>
+          <button class="nav-tab" data-tab="recovery">Recovery</button>
+          <button class="nav-tab" data-tab="metrics">Metrics</button>
+        </nav>
+      </div>
+      <div class="nav-right">
+        <button id="open-job-modal-btn" class="btn btn-sm btn-accent">+ Create Job</button>
+        <div class="user-badge">
+          <span id="user-display">Operator</span>
+          <button id="logout-btn" class="btn-icon" title="Logout">&xotime;</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- MAIN CONTENT VIEW CONTAINER -->
+    <main class="main-content">
+      <!-- 1. OVERVIEW VIEW -->
+      <section id="view-overview" class="view-panel active">
+        <div class="metrics-grid-4">
+          <div class="stat-card">
+            <span class="stat-label">System Health</span>
+            <div class="stat-value text-green" id="overview-status">HEALTHY</div>
+            <span class="stat-subtext" id="overview-uptime">Uptime: 99.9%</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Queue Depth</span>
+            <div class="stat-value text-cyan" id="overview-queue-depth">0</div>
+            <span class="stat-subtext">Across active queues</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Active Workers</span>
+            <div class="stat-value text-purple" id="overview-workers-count">0</div>
+            <span class="stat-subtext" id="overview-concurrency">Capacity: 25 slots</span>
+          </div>
+          <div class="stat-card">
+            <span class="stat-label">Throughput Rate</span>
+            <div class="stat-value text-blue" id="overview-throughput">0 req/s</div>
+            <span class="stat-subtext">Real-time processing</span>
+          </div>
+        </div>
+
+        <div class="grid-2-1 mt-6">
+          <div class="panel-card">
+            <div class="panel-header">
+              <h3>System Execution Pipeline</h3>
+              <span class="badge badge-purple">Live Feed</span>
+            </div>
+            <div class="pipeline-summary">
+              <div class="pipe-node">
+                <span class="pipe-icon">📥</span>
+                <div class="pipe-info">
+                  <span class="pipe-title">Total Enqueued</span>
+                  <span class="pipe-val" id="sum-enqueued">0</span>
+                </div>
+              </div>
+              <div class="pipe-arrow">➔</div>
+              <div class="pipe-node">
+                <span class="pipe-icon">⚙️</span>
+                <div class="pipe-info">
+                  <span class="pipe-title">Processing</span>
+                  <span class="pipe-val" id="sum-processing">0</span>
+                </div>
+              </div>
+              <div class="pipe-arrow">➔</div>
+              <div class="pipe-node">
+                <span class="pipe-icon">✅</span>
+                <div class="pipe-info">
+                  <span class="pipe-title">Completed</span>
+                  <span class="pipe-val text-green" id="sum-completed">0</span>
+                </div>
+              </div>
+              <div class="pipe-arrow">➔</div>
+              <div class="pipe-node">
+                <span class="pipe-icon">💀</span>
+                <div class="pipe-info">
+                  <span class="pipe-title">Dead Letter Queue</span>
+                  <span class="pipe-val text-red" id="sum-dlq">0</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel-card">
+            <div class="panel-header">
+              <h3>Fault Tolerance & Recovery</h3>
+              <span class="badge badge-orange" id="overview-recovery-role">LEADER</span>
+            </div>
+            <div class="recovery-summary-list">
+              <div class="summary-item">
+                <span>Stale Jobs Recovered</span>
+                <strong id="overview-stale-recovered">0</strong>
+              </div>
+              <div class="summary-item">
+                <span>Reconciled Redis Jobs</span>
+                <strong id="overview-reconciled">0</strong>
+              </div>
+              <div class="summary-item">
+                <span>Orphans Cleared</span>
+                <strong id="overview-orphans">0</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. FLOW VIEW (HERO SCREEN ⭐) -->
+      <section id="view-flow" class="view-panel">
+        <div class="flow-container">
+          <div class="flow-header-bar">
+            <div>
+              <h2>Flux Architecture Flow View ⚡</h2>
+              <p>Real-time visual stream tracking producers, Redis transport, worker runtimes, and canonical PostgreSQL state.</p>
+            </div>
+            <div class="flow-legend">
+              <span class="legend-item"><span class="dot purple"></span> Producers</span>
+              <span class="legend-item"><span class="dot blue"></span> Queues</span>
+              <span class="legend-item"><span class="dot cyan"></span> Workers</span>
+              <span class="legend-item"><span class="dot green"></span> Storage</span>
+              <span class="legend-item"><span class="dot orange"></span> Retries</span>
+              <span class="legend-item"><span class="dot red"></span> DLQ</span>
+            </div>
+          </div>
+
+          <!-- FLOW VIEW DIAGRAM GRID -->
+          <div class="flow-diagram-wrapper">
+            <!-- TOP AUXILIARY LAYER -->
+            <div class="flow-row top-row">
+              <div class="flow-card node-aux" id="node-scheduler">
+                <div class="node-icon">⏱️</div>
+                <div class="node-content">
+                  <h4>Cron Scheduler</h4>
+                  <span class="node-status text-purple" id="flow-sched-status">IDLE</span>
+                  <div class="node-metrics">Next run: <span id="flow-sched-next">--</span></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- CORE PIPELINE LAYER (PRODUCERS -> QUEUES -> WORKERS -> STORAGE) -->
+            <div class="flow-row core-row">
+              <!-- PRODUCERS -->
+              <div class="flow-card node-core" id="node-producers">
+                <div class="node-header">
+                  <span class="node-badge purple">PRODUCERS</span>
+                  <span class="pulse-dot purple"></span>
+                </div>
+                <h3>HTTP API / Triggers</h3>
+                <p>Job Producer Ingestion</p>
+                <div class="node-stat-box">
+                  <span class="lbl">Created Total</span>
+                  <span class="val text-purple" id="flow-created-total">0</span>
+                </div>
+              </div>
+
+              <div class="flow-connector">
+                <div class="stream-line"></div>
+                <div class="packet-particle purple"></div>
+              </div>
+
+              <!-- QUEUES -->
+              <div class="flow-card node-core" id="node-queues">
+                <div class="node-header">
+                  <span class="node-badge blue">REDIS TRANSPORT</span>
+                  <span class="pulse-dot blue"></span>
+                </div>
+                <h3>Redis Job Queues</h3>
+                <p>In-Memory List Transport</p>
+                <div class="node-stat-box">
+                  <span class="lbl">Queued Depth</span>
+                  <span class="val text-blue" id="flow-queued-depth">0</span>
+                </div>
+              </div>
+
+              <div class="flow-connector">
+                <div class="stream-line"></div>
+                <div class="packet-particle blue"></div>
+              </div>
+
+              <!-- WORKERS -->
+              <div class="flow-card node-core" id="node-workers">
+                <div class="node-header">
+                  <span class="node-badge cyan">WORKER RUNTIME</span>
+                  <span class="pulse-dot cyan"></span>
+                </div>
+                <h3>Worker Pool</h3>
+                <p>Concurrent Execution Nodes</p>
+                <div class="node-stat-box">
+                  <span class="lbl">Active Processing</span>
+                  <span class="val text-cyan" id="flow-processing-count">0</span>
+                </div>
+              </div>
+
+              <div class="flow-connector">
+                <div class="stream-line"></div>
+                <div class="packet-particle cyan"></div>
+              </div>
+
+              <!-- STORAGE -->
+              <div class="flow-card node-core" id="node-storage">
+                <div class="node-header">
+                  <span class="node-badge green">CANONICAL DB</span>
+                  <span class="pulse-dot green"></span>
+                </div>
+                <h3>PostgreSQL 16</h3>
+                <p>Single Source of Truth</p>
+                <div class="node-stat-box">
+                  <span class="lbl">Completed Jobs</span>
+                  <span class="val text-green" id="flow-completed-total">0</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- BOTTOM FAULT TOLERANCE & RECOVERY LAYER -->
+            <div class="flow-row bottom-row">
+              <div class="flow-card node-fault" id="node-retries">
+                <div class="node-header">
+                  <span class="node-badge orange">RETRIES</span>
+                </div>
+                <h4>Exponential Backoff</h4>
+                <div class="node-metrics">Pending Retries: <span id="flow-retries-count" class="text-orange">0</span></div>
+              </div>
+
+              <div class="flow-card node-fault" id="node-recovery">
+                <div class="node-header">
+                  <span class="node-badge cyan">RECOVERY</span>
+                </div>
+                <h4>Distributed Recovery</h4>
+                <div class="node-metrics">Role: <span id="flow-recovery-role" class="text-cyan">LEADER</span></div>
+              </div>
+
+              <div class="flow-card node-fault" id="node-dlq">
+                <div class="node-header">
+                  <span class="node-badge red">DLQ</span>
+                </div>
+                <h4>Dead Letter Queue</h4>
+                <div class="node-metrics">Terminal Failures: <span id="flow-dlq-count" class="text-red">0</span></div>
+              </div>
+
+              <div class="flow-card node-fault" id="node-observability">
+                <div class="node-header">
+                  <span class="node-badge blue">OTEL / PROM</span>
+                </div>
+                <h4>Observability</h4>
+                <div class="node-metrics">Status: <span class="text-green">ACTIVE</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. JOBS VIEW -->
+      <section id="view-jobs" class="view-panel">
+        <div class="panel-card">
+          <div class="panel-header flex-between">
+            <h3>Job Management Table</h3>
+            <div class="filter-controls">
+              <select id="job-status-filter">
+                <option value="ALL">All Statuses</option>
+                <option value="QUEUED">QUEUED</option>
+                <option value="RUNNING">RUNNING</option>
+                <option value="COMPLETED">COMPLETED</option>
+                <option value="FAILED">FAILED</option>
+                <option value="RETRYING">RETRYING</option>
+                <option value="DLQ">DLQ</option>
+              </select>
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Job ID</th>
+                  <th>Name</th>
+                  <th>Queue</th>
+                  <th>Status</th>
+                  <th>Priority</th>
+                  <th>Attempts</th>
+                  <th>Created At</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="jobs-table-body">
+                <tr><td colspan="8" class="text-center text-muted">Loading jobs...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. QUEUES VIEW -->
+      <section id="view-queues" class="view-panel">
+        <div class="panel-card">
+          <div class="panel-header">
+            <h3>Active Queue Transport Depth</h3>
+          </div>
+          <div class="metrics-grid-3" id="queues-grid">
+            <div class="stat-card">
+              <span class="stat-label">Queue: default</span>
+              <div class="stat-value text-blue" id="queue-default-depth">0</div>
+              <span class="stat-subtext">Waiting tasks</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 5. WORKERS VIEW -->
+      <section id="view-workers" class="view-panel">
+        <div class="panel-card">
+          <div class="panel-header">
+            <h3>Worker Runtime Nodes</h3>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Worker ID</th>
+                  <th>Status</th>
+                  <th>Active Queues</th>
+                  <th>Concurrency</th>
+                  <th>Last Seen</th>
+                </tr>
+              </thead>
+              <tbody id="workers-table-body">
+                <tr><td colspan="5" class="text-center text-muted">Loading worker nodes...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 6. SCHEDULES VIEW -->
+      <section id="view-schedules" class="view-panel">
+        <div class="panel-card">
+          <div class="panel-header">
+            <h3>Cron & Scheduled Tasks</h3>
+          </div>
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Schedule ID</th>
+                  <th>Name</th>
+                  <th>Cron Expression</th>
+                  <th>Target Queue</th>
+                  <th>Next Run At</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="schedules-table-body">
+                <tr><td colspan="6" class="text-center text-muted">Loading scheduled tasks...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- 7. RECOVERY VIEW -->
+      <section id="view-recovery" class="view-panel">
+        <div class="panel-card">
+          <div class="panel-header">
+            <h3>Distributed Recovery & Reconciliation Engine</h3>
+            <button id="trigger-recovery-btn" class="btn btn-sm btn-accent">Run Recovery Scan</button>
+          </div>
+          <div class="metrics-grid-4">
+            <div class="stat-card">
+              <span class="stat-label">Leadership Role</span>
+              <div class="stat-value text-cyan" id="recovery-role">STANDBY</div>
+              <span class="stat-subtext">Redis lock state</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Total Scans</span>
+              <div class="stat-value text-purple" id="recovery-scans">0</div>
+              <span class="stat-subtext">Scan cycles</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Stale Recovered</span>
+              <div class="stat-value text-green" id="recovery-recovered">0</div>
+              <span class="stat-subtext">Jobs requeued</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">Reconciled Jobs</span>
+              <div class="stat-value text-orange" id="recovery-reconciled">0</div>
+              <span class="stat-subtext">Transport syncs</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 8. METRICS VIEW -->
+      <section id="view-metrics" class="view-panel">
+        <div class="panel-card">
+          <div class="panel-header">
+            <h3>Prometheus & Connection Pool Metrics</h3>
+          </div>
+          <div class="metrics-grid-3">
+            <div class="stat-card">
+              <span class="stat-label">DB Pool Active</span>
+              <div class="stat-value text-purple" id="metric-db-active">0</div>
+              <span class="stat-subtext">Active SQL connections</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">DB Pool Idle</span>
+              <div class="stat-value text-green" id="metric-db-idle">0</div>
+              <span class="stat-subtext">Available connections</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-label">DB Pool Waiting</span>
+              <div class="stat-value text-orange" id="metric-db-waiting">0</div>
+              <span class="stat-subtext">Queued connection requests</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/dashboard/app.js"></script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 import express, { Express } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import path from 'path';
 import { requestLoggerMiddleware } from './middleware/requestLogger.middleware.js';
 import { correlationIdMiddleware } from './middleware/correlationId.middleware.js';
 import { metricsMiddleware } from './middleware/metrics.middleware.js';
@@ -16,7 +17,11 @@ const app: Express = express();
 app.use(correlationIdMiddleware);
 app.use(metricsMiddleware);
 app.use(securityHeadersMiddleware);
-app.use(helmet());
+app.use(
+  helmet({
+    contentSecurityPolicy: false, // Disable restrictive default CSP for self-contained UI dashboard
+  }),
+);
 app.use(cors());
 
 // Request Parsing Middlewares with payload size limit (1MB max)
@@ -25,6 +30,10 @@ app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 // Request Logging Middleware
 app.use(requestLoggerMiddleware);
+
+// Serve Operational Dashboard static UI
+const publicDir = path.join(process.cwd(), 'public');
+app.use('/dashboard', express.static(publicDir));
 
 // OpenAPI Swagger UI Documentation
 app.use('/docs', swaggerServe, swaggerSetup);
