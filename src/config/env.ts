@@ -25,16 +25,32 @@ const envSchema = z.object({
   REDIS_DB: z.coerce.number().default(0),
 
   ADMINER_PORT: z.coerce.number().default(18086),
+
+  // Auth Configuration
+  AUTH_ENABLED: z.string().optional().default('true'),
+  JWT_SECRET: z.string().default('flux-super-secret-dev-jwt-key-do-not-use-in-prod'),
+  JWT_ACCESS_TOKEN_TTL: z.string().default('1h'),
+  API_KEY_PREFIX: z.string().default('flux_live_'),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);
 
 if (!parsedEnv.success) {
-  // Safe console format during bootstrap initialization
   process.stderr.write(
     `Invalid environment configuration:\n${JSON.stringify(parsedEnv.error.format(), null, 2)}\n`,
   );
   process.exit(1);
+}
+
+// Fail-fast security check for Production
+if (parsedEnv.data.NODE_ENV === 'production') {
+  const defaultDevSecret = 'flux-super-secret-dev-jwt-key-do-not-use-in-prod';
+  if (!parsedEnv.data.JWT_SECRET || parsedEnv.data.JWT_SECRET === defaultDevSecret) {
+    process.stderr.write(
+      'CRITICAL SECURITY ERROR: JWT_SECRET must be explicitly configured with a secure secret in production!\n',
+    );
+    process.exit(1);
+  }
 }
 
 export const env = parsedEnv.data;

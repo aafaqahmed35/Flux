@@ -1,16 +1,18 @@
+import { env } from '../config/env.js';
+
 export const isAuthEnabled = (): boolean => {
-  return process.env.AUTH_ENABLED === 'true';
+  return env.AUTH_ENABLED === 'true';
 };
 
 export const AUTH_DEFAULTS = {
   get jwtSecret() {
-    return process.env.JWT_SECRET || 'flux-super-secret-dev-jwt-key-do-not-use-in-prod';
+    return env.JWT_SECRET;
   },
   get jwtExpiresIn() {
-    return process.env.JWT_ACCESS_TOKEN_TTL || '1h';
+    return env.JWT_ACCESS_TOKEN_TTL;
   },
   get apiKeyPrefix() {
-    return process.env.API_KEY_PREFIX || 'flux_live_';
+    return env.API_KEY_PREFIX;
   },
   bcryptSaltRounds: 10,
   maxFailedLoginAttempts: 5,
@@ -36,6 +38,8 @@ export const ROLE_SCOPES_MAP: Record<string, string[]> = {
     'schedules:read',
     'schedules:write',
     'metrics:read',
+    'recovery:read',
+    'recovery:write',
   ],
   VIEWER: [
     'jobs:read',
@@ -45,5 +49,6 @@ export const ROLE_SCOPES_MAP: Record<string, string[]> = {
     'deadletter:read',
     'schedules:read',
     'metrics:read',
+    'recovery:read',
   ],
 };
