@@ -12,6 +12,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY tsconfig.json ./
 COPY src ./src
 COPY scripts ./scripts
+COPY public ./public
 RUN npm run build
 
 # Stage 3 — Production Runner
@@ -29,6 +30,7 @@ COPY package*.json ./
 RUN npm ci --only=production && npm cache clean --force
 
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/public ./public
 
 # Run as non-root node user
 USER node
