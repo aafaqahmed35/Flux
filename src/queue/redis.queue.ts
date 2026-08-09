@@ -37,7 +37,7 @@ export class RedisQueue implements IQueueEngine {
 
     const start = Date.now();
     try {
-      appLogger.info('Enqueue Start', { jobId, queueName, queueKey });
+      appLogger.debug('Enqueue Start', { jobId, queueName, queueKey });
 
       const pipeline = this.client.pipeline();
       pipeline.rpush(queueKey, jobId);
@@ -45,7 +45,7 @@ export class RedisQueue implements IQueueEngine {
       await pipeline.exec();
 
       const rtt = Date.now() - start;
-      appLogger.info('Enqueue Success', { jobId, queueName, rttMs: rtt });
+      appLogger.debug('Enqueue Success', { jobId, queueName, rttMs: rtt });
 
       prometheusRegistry.incrementCounter(METRIC_NAMES.QUEUE_ENQUEUED_TOTAL, 1, {
         queue: queueName,
@@ -77,7 +77,7 @@ export class RedisQueue implements IQueueEngine {
 
     const start = Date.now();
     try {
-      appLogger.info('Batch Enqueue Start', { count: jobIds.length, queueName });
+      appLogger.debug('Batch Enqueue Start', { count: jobIds.length, queueName });
 
       const pipeline = this.client.pipeline();
       jobIds.forEach((jobId) => {
@@ -87,7 +87,7 @@ export class RedisQueue implements IQueueEngine {
       await pipeline.exec();
 
       const rtt = Date.now() - start;
-      appLogger.info('Batch Enqueue Success', { count: jobIds.length, queueName, rttMs: rtt });
+      appLogger.debug('Batch Enqueue Success', { count: jobIds.length, queueName, rttMs: rtt });
 
       prometheusRegistry.incrementCounter(METRIC_NAMES.QUEUE_ENQUEUED_TOTAL, jobIds.length, {
         queue: queueName,
@@ -124,7 +124,7 @@ export class RedisQueue implements IQueueEngine {
         prometheusRegistry.incrementCounter(METRIC_NAMES.QUEUE_CLAIMED_TOTAL, 1, {
           queue: queueName,
         });
-        appLogger.info('Job Claimed from Redis', { jobId, queueName, sourceKey, destKey });
+        appLogger.debug('Job Claimed from Redis', { jobId, queueName, sourceKey, destKey });
       }
 
       return jobId;
@@ -142,14 +142,14 @@ export class RedisQueue implements IQueueEngine {
     prometheusRegistry.incrementCounter(METRIC_NAMES.QUEUE_ACKNOWLEDGED_TOTAL, 1, {
       queue: queueName,
     });
-    appLogger.info('Job Acknowledged & Removed from Processing', { jobId, queueName, destKey });
+    appLogger.debug('Job Acknowledged & Removed from Processing', { jobId, queueName, destKey });
   }
 
   async queueLength(queueName: string): Promise<number> {
     await this.ensureConnected();
     const queueKey = QueueKeyFactory.queue(queueName);
     const length = await this.client.llen(queueKey);
-    appLogger.info('Queue Length Requested', { queueName, length });
+    appLogger.debug('Queue Length Requested', { queueName, length });
     return length;
   }
 

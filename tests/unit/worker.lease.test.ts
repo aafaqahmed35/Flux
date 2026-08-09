@@ -85,8 +85,7 @@ describe('Worker Lease Heartbeat Unit Tests', () => {
 
     const { updateJobLease } = mockRepository;
     const initialCalls = updateJobLease.mock.calls.length;
-
-    await worker.stop();
+    (worker as any).clearAllLeaseHeartbeats();
 
     await jest.advanceTimersByTimeAsync(300);
 

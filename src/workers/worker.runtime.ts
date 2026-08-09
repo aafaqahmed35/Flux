@@ -319,7 +319,10 @@ export class WorkerRuntime {
           executionTimeMs: result.durationMs,
         });
         await this.queueEngine.ackJob(queueName, jobId);
-        appLogger.info('Job Execution Success Persisted', { jobId, durationMs: result.durationMs });
+        appLogger.debug('Job Execution Success Persisted', {
+          jobId,
+          durationMs: result.durationMs,
+        });
       } else {
         const error = result.error || new Error('Processor execution error');
         prometheusRegistry.incrementCounter(METRIC_NAMES.JOBS_FAILED_TOTAL, 1, {

@@ -67,6 +67,7 @@ _Note: Container internal networking remains standard (`3000`, `5432`, `6379`, `
 - [x] **Phase 7: Dead Letter Queue (DLQ) & Failure Recovery**
 - [x] **Phase 8: Job Metrics, OpenTelemetry & Observability**
 - [x] **Phase 9: Distributed Recovery, Reconciliation & Fault Tolerance** ([docs/recovery.md](docs/recovery.md))
+- [x] **Phase 10: Performance & Load Engineering** ([docs/performance.md](docs/performance.md))
 
 ---
 

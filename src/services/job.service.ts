@@ -101,7 +101,7 @@ export class JobService implements IJobService {
       // 3. Update PostgreSQL status to QUEUED upon Redis push success
       const queuedJob = await this.repository.updateStatus(job.id, JobStatus.QUEUED);
 
-      appLogger.info('Job created and enqueued successfully via service layer', {
+      appLogger.debug('Job created and enqueued successfully via service layer', {
         jobId: queuedJob.id,
         name: queuedJob.name,
         queueName: queuedJob.queueName,

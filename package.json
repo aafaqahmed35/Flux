@@ -22,7 +22,9 @@
     "migrate": "tsx scripts/migrate.ts --apply",
     "migrate:status": "tsx scripts/migrate.ts --status",
     "migrate:history": "tsx scripts/migrate.ts --history",
+    "performance": "tsx tests/performance/load-test.ts",
     "prepare": "husky || true"
+
   },
   "keywords": [
     "job-processor",
