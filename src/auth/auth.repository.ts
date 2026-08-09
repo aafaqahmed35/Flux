@@ -66,6 +66,21 @@ export class AuthRepository {
     return this.mapUserRow(res.rows[0]!);
   }
 
+  async upsertUser(data: { email: string; passwordHash: string; role: UserRole }): Promise<User> {
+    const res = await pgPool.query<UserRow>(
+      `INSERT INTO users (email, password_hash, role, enabled)
+       VALUES ($1, $2, $3, TRUE)
+       ON CONFLICT (email) DO UPDATE
+       SET password_hash = EXCLUDED.password_hash,
+           role = EXCLUDED.role,
+           enabled = TRUE,
+           updated_at = NOW()
+       RETURNING *`,
+      [data.email, data.passwordHash, data.role],
+    );
+    return this.mapUserRow(res.rows[0]!);
+  }
+
   async findUserByEmail(email: string): Promise<User | null> {
     const res = await pgPool.query<UserRow>('SELECT * FROM users WHERE email = $1', [email]);
     if (res.rows.length === 0) return null;

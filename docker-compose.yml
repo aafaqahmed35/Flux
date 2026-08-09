@@ -21,9 +21,13 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-flux_password}
       - REDIS_HOST=flux-redis
       - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - AUTH_ENABLED=${AUTH_ENABLED:-true}
+      - JWT_SECRET=${JWT_SECRET:-flux-super-secret-dev-jwt-key-do-not-use-in-prod}
+      - JWT_ACCESS_TOKEN_TTL=${JWT_ACCESS_TOKEN_TTL:-1h}
+      - API_KEY_PREFIX=${API_KEY_PREFIX:-flux_}
       - OTEL_SERVICE_NAME=flux-api
     networks:
+
       - flux-network
     depends_on:
       flux-postgres:
