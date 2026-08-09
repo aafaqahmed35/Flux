@@ -16,6 +16,8 @@ export type ApiKeyScope =
   | 'schedules:read'
   | 'schedules:write'
   | 'metrics:read'
+  | 'recovery:read'
+  | 'recovery:write'
   | 'admin:*';
 
 export interface User {

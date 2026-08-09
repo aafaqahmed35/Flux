@@ -72,6 +72,13 @@ describe('JobService (Unit Tests)', () => {
       findDueRetries: jest.fn(),
       addRetryHistoryRecord: jest.fn(),
       getJobRetryHistory: jest.fn(),
+      findStaleRunningJobs: jest.fn(),
+      findClaimedJobs: jest.fn(),
+      findRecoverablePendingJobs: jest.fn(),
+      findRetryingJobs: jest.fn(),
+      recoverStaleJob: jest.fn(),
+      recoverPendingJob: jest.fn(),
+      updateJobLease: jest.fn(),
     };
 
     mockQueueService = {

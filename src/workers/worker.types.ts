@@ -21,4 +21,5 @@ export interface WorkerOptions {
   concurrency?: number;
   heartbeatIntervalMs?: number;
   pollIntervalMs?: number;
+  leaseRenewalIntervalMs?: number;
 }

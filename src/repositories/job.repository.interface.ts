@@ -36,4 +36,18 @@ export interface IJobRepository {
   count(options?: CountJobsOptions): Promise<number>;
   countByStatus(queueName?: string): Promise<Record<JobStatus, number>>;
   listJobs(options?: ListJobsOptions): Promise<PaginatedJobsResult>;
+
+  // Recovery operations
+  findStaleRunningJobs(leaseTimeoutMs: number, limit?: number): Promise<Job[]>;
+  findClaimedJobs(leaseTimeoutMs: number, limit?: number): Promise<Job[]>;
+  findRecoverablePendingJobs(staleThresholdMs: number, limit?: number): Promise<Job[]>;
+  findRetryingJobs(limit?: number): Promise<Job[]>;
+  recoverStaleJob(
+    jobId: string,
+    fromStatus: JobStatus,
+    targetStatus: JobStatus,
+    reason: string,
+  ): Promise<boolean>;
+  recoverPendingJob(jobId: string): Promise<boolean>;
+  updateJobLease(jobId: string, workerId: string): Promise<boolean>;
 }

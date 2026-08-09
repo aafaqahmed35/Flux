@@ -10,7 +10,9 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { processorRegistry } from '../workers/processor.registry.js';
 import { workerRegistry } from '../workers/worker.registry.js';
 import { schedulerRuntime } from '../schedules/scheduler.runtime.js';
+import { recoveryRuntime } from '../recovery/recovery.runtime.js';
 import { prometheusRegistry } from '../observability/prometheus.js';
+
 import { openTelemetryManager } from '../observability/opentelemetry.js';
 import { isAuthEnabled } from '../auth/auth.constants.js';
 
@@ -240,6 +242,35 @@ export const getHealth = asyncHandler(async (_req: Request, res: Response): Prom
     // Graceful fallback
   }
 
+  let recoveryMetrics = {
+    leader: false,
+    running: false,
+    lastTick: null as string | null,
+    totalScans: 0,
+    totalRecovered: 0,
+    totalFailed: 0,
+    totalStaleJobs: 0,
+    totalReconciled: 0,
+    totalOrphansRemoved: 0,
+  };
+
+  try {
+    const rm = recoveryRuntime.getMetrics();
+    recoveryMetrics = {
+      leader: rm.leader,
+      running: rm.running,
+      lastTick: rm.lastTick,
+      totalScans: rm.totalScans,
+      totalRecovered: rm.totalRecovered,
+      totalFailed: rm.totalFailed,
+      totalStaleJobs: rm.totalStaleJobs,
+      totalReconciled: rm.totalReconciled,
+      totalOrphansRemoved: rm.totalOrphansRemoved,
+    };
+  } catch {
+    // Graceful fallback
+  }
+
   const overallStatus = dbStatus === 'UP' && redisStatus === 'UP' ? 'UP' : 'DEGRADED';
   const statusCode = overallStatus === 'UP' ? HTTP_STATUS.OK : HTTP_STATUS.SERVICE_UNAVAILABLE;
 
@@ -272,6 +303,7 @@ export const getHealth = asyncHandler(async (_req: Request, res: Response): Prom
       retry: retryMetrics,
       workers: workerMetrics,
       scheduler: schedulerMetrics,
+      recovery: recoveryMetrics,
       observability: {
         metrics: prometheusRegistry.isEnabled(),
         tracing: openTelemetryManager.isRunning(),

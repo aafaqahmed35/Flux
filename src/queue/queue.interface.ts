@@ -19,4 +19,13 @@ export interface IQueueEngine {
   pushToDeadLetter(jobId: string): Promise<void>;
   removeFromDeadLetter(jobId: string): Promise<boolean>;
   getDeadLetterJobIds(limit?: number, offset?: number): Promise<string[]>;
+
+  // Reconciliation & Recovery primitives
+  containsJob(queueName: string, jobId: string): Promise<boolean>;
+  listProcessingJobs(queueName: string): Promise<string[]>;
+  listQueuedJobs(queueName: string): Promise<string[]>;
+  listAllQueueJobIds(queueName: string): Promise<string[]>;
+  removeProcessingJob(queueName: string, jobId: string): Promise<boolean>;
+  removeOrphanJob(queueName: string, jobId: string): Promise<boolean>;
+  rebuildQueue(queueName: string, jobIds: string[]): Promise<void>;
 }

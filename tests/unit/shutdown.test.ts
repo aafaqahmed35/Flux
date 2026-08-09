@@ -4,7 +4,7 @@ describe('Graceful Shutdown Coordinator', () => {
   let mockExit: jest.SpyInstance;
 
   beforeEach(() => {
-    mockExit = jest.spyOn(process, 'exit').mockImplementation((() => { }) as any);
+    mockExit = jest.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
   });
 
   afterEach(() => {

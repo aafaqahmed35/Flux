@@ -823,6 +823,131 @@ export class PostgresJobRepository implements IJobRepository {
       offset,
     };
   }
+
+  // Recovery operations
+  async findStaleRunningJobs(leaseTimeoutMs: number, limit = 100): Promise<Job[]> {
+    const cutoff = new Date(Date.now() - leaseTimeoutMs);
+    const sql = `
+      SELECT * FROM jobs
+      WHERE status = 'RUNNING'
+        AND is_deleted = FALSE
+        AND (locked_at IS NULL OR locked_at <= $1)
+      ORDER BY locked_at ASC NULLS FIRST, created_at ASC
+      LIMIT $2
+    `;
+    const result = await this.pool.query<DatabaseJobRow>(sql, [cutoff, Math.max(1, limit)]);
+    return result.rows.map((row) => this.mapRowToJob(row));
+  }
+
+  async findClaimedJobs(leaseTimeoutMs: number, limit = 100): Promise<Job[]> {
+    const cutoff = new Date(Date.now() - leaseTimeoutMs);
+    const sql = `
+      SELECT * FROM jobs
+      WHERE status = 'CLAIMED'
+        AND is_deleted = FALSE
+        AND (locked_at IS NULL OR locked_at <= $1)
+      ORDER BY locked_at ASC NULLS FIRST, created_at ASC
+      LIMIT $2
+    `;
+    const result = await this.pool.query<DatabaseJobRow>(sql, [cutoff, Math.max(1, limit)]);
+    return result.rows.map((row) => this.mapRowToJob(row));
+  }
+
+  async findRecoverablePendingJobs(staleThresholdMs: number, limit = 100): Promise<Job[]> {
+    const cutoff = new Date(Date.now() - staleThresholdMs);
+    const sql = `
+      SELECT * FROM jobs
+      WHERE status = 'PENDING'
+        AND is_deleted = FALSE
+        AND created_at <= $1
+        AND (scheduled_for IS NULL OR scheduled_for <= NOW())
+        AND (delay_until IS NULL OR delay_until <= NOW())
+      ORDER BY created_at ASC
+      LIMIT $2
+    `;
+    const result = await this.pool.query<DatabaseJobRow>(sql, [cutoff, Math.max(1, limit)]);
+    return result.rows.map((row) => this.mapRowToJob(row));
+  }
+
+  async findRetryingJobs(limit = 100): Promise<Job[]> {
+    const sql = `
+      SELECT * FROM jobs
+      WHERE status = 'RETRYING'
+        AND is_deleted = FALSE
+        AND next_retry_at IS NOT NULL
+        AND next_retry_at <= NOW()
+      ORDER BY next_retry_at ASC, created_at ASC
+      LIMIT $1
+    `;
+    const result = await this.pool.query<DatabaseJobRow>(sql, [Math.max(1, limit)]);
+    return result.rows.map((row) => this.mapRowToJob(row));
+  }
+
+  async recoverStaleJob(
+    jobId: string,
+    fromStatus: JobStatus,
+    targetStatus: JobStatus,
+    reason: string,
+  ): Promise<boolean> {
+    const isTerminalFailure =
+      targetStatus === JobStatus.FAILED || targetStatus === JobStatus.CANCELLED;
+
+    let extraSetClauses = '';
+    if (isTerminalFailure) {
+      extraSetClauses += `, failed_at = NOW()`;
+    }
+    if (targetStatus === JobStatus.FAILED) {
+      extraSetClauses += `, dead_lettered_at = NOW(), dead_letter_reason = $2`;
+    }
+
+    const sql = `
+      UPDATE jobs
+      SET status = $1,
+          failure_reason = $2,
+          error_message = $2,
+          worker_id = NULL,
+          locked_at = NULL,
+          version = version + 1,
+          updated_at = NOW()
+          ${extraSetClauses}
+      WHERE id = $3
+        AND status = $4
+        AND is_deleted = FALSE
+    `;
+
+    const result = await this.pool.query(sql, [targetStatus, reason, jobId, fromStatus]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async recoverPendingJob(jobId: string): Promise<boolean> {
+    const sql = `
+      UPDATE jobs
+      SET status = 'QUEUED',
+          version = version + 1,
+          updated_at = NOW()
+      WHERE id = $1
+        AND status = 'PENDING'
+        AND is_deleted = FALSE
+    `;
+
+    const result = await this.pool.query(sql, [jobId]);
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async updateJobLease(jobId: string, workerId: string): Promise<boolean> {
+    const sql = `
+      UPDATE jobs
+      SET locked_at = NOW(),
+          updated_at = NOW()
+      WHERE id = $1
+        AND worker_id = $2
+        AND status = 'RUNNING'
+        AND is_deleted = FALSE
+    `;
+
+    const result = await this.pool.query(sql, [jobId, workerId]);
+    return (result.rowCount ?? 0) > 0;
+  }
 }
 
 export const jobRepository = new PostgresJobRepository();

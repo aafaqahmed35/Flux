@@ -3,4 +3,5 @@ export const WORKER_DEFAULTS = {
   heartbeatIntervalMs: 5000,
   pollIntervalMs: 100,
   heartbeatTimeoutMs: 15000,
+  leaseRenewalIntervalMs: 10000,
 };

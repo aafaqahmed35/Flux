@@ -126,4 +126,118 @@ describe('PostgresJobRepository (Unit Tests)', () => {
       JobNotFoundError,
     );
   });
+
+  describe('Recovery Operations Unit Tests', () => {
+    it('should find stale RUNNING jobs', async () => {
+      const staleRow = {
+        ...sampleDbRow,
+        status: 'RUNNING',
+        locked_at: new Date(Date.now() - 60000),
+      };
+      mockQuery.mockResolvedValueOnce({ rows: [staleRow], rowCount: 1 });
+
+      const jobs = await repository.findStaleRunningJobs(30000, 10);
+      expect(jobs.length).toBe(1);
+      expect(jobs[0]?.status).toBe(JobStatus.RUNNING);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining("status = 'RUNNING'"),
+        expect.arrayContaining([expect.any(Date), 10]),
+      );
+    });
+
+    it('should find stale CLAIMED jobs', async () => {
+      const claimedRow = {
+        ...sampleDbRow,
+        status: 'CLAIMED',
+        locked_at: new Date(Date.now() - 60000),
+      };
+      mockQuery.mockResolvedValueOnce({ rows: [claimedRow], rowCount: 1 });
+
+      const jobs = await repository.findClaimedJobs(30000, 5);
+      expect(jobs.length).toBe(1);
+      expect(jobs[0]?.status).toBe(JobStatus.CLAIMED);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining("status = 'CLAIMED'"),
+        expect.arrayContaining([expect.any(Date), 5]),
+      );
+    });
+
+    it('should find recoverable PENDING jobs', async () => {
+      const pendingRow = {
+        ...sampleDbRow,
+        status: 'PENDING',
+        created_at: new Date(Date.now() - 120000),
+      };
+      mockQuery.mockResolvedValueOnce({ rows: [pendingRow], rowCount: 1 });
+
+      const jobs = await repository.findRecoverablePendingJobs(60000, 10);
+      expect(jobs.length).toBe(1);
+      expect(jobs[0]?.status).toBe(JobStatus.PENDING);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining("status = 'PENDING'"),
+        expect.arrayContaining([expect.any(Date), 10]),
+      );
+    });
+
+    it('should find due RETRYING jobs and exclude NULL next_retry_at', async () => {
+      const retryingRow = {
+        ...sampleDbRow,
+        status: 'RETRYING',
+        next_retry_at: new Date(Date.now() - 1000),
+      };
+      mockQuery.mockResolvedValueOnce({ rows: [retryingRow], rowCount: 1 });
+
+      const jobs = await repository.findRetryingJobs(10);
+      expect(jobs.length).toBe(1);
+      expect(jobs[0]?.status).toBe(JobStatus.RETRYING);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining('next_retry_at IS NOT NULL'),
+        [10],
+      );
+    });
+
+    it('should recover stale job atomically (returning true on success, false when zero rows affected)', async () => {
+      mockQuery.mockResolvedValueOnce({ rowCount: 1 });
+      const success = await repository.recoverStaleJob(
+        'job-1',
+        JobStatus.RUNNING,
+        JobStatus.RETRYING,
+        'Stale lease',
+      );
+      expect(success).toBe(true);
+
+      mockQuery.mockResolvedValueOnce({ rowCount: 0 });
+      const failed = await repository.recoverStaleJob(
+        'job-1',
+        JobStatus.RUNNING,
+        JobStatus.RETRYING,
+        'Stale lease',
+      );
+      expect(failed).toBe(false);
+    });
+
+    it('should recover pending job atomically (returning true on success, false when zero rows affected)', async () => {
+      mockQuery.mockResolvedValueOnce({ rowCount: 1 });
+      const success = await repository.recoverPendingJob('job-2');
+      expect(success).toBe(true);
+
+      mockQuery.mockResolvedValueOnce({ rowCount: 0 });
+      const failed = await repository.recoverPendingJob('job-2');
+      expect(failed).toBe(false);
+    });
+
+    it('should update job lease atomically (returning true for matching worker & RUNNING status, false otherwise)', async () => {
+      mockQuery.mockResolvedValueOnce({ rowCount: 1 });
+      const success = await repository.updateJobLease('job-3', 'worker-1');
+      expect(success).toBe(true);
+      expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('worker_id = $2'), [
+        'job-3',
+        'worker-1',
+      ]);
+
+      mockQuery.mockResolvedValueOnce({ rowCount: 0 });
+      const failed = await repository.updateJobLease('job-3', 'wrong-worker');
+      expect(failed).toBe(false);
+    });
+  });
 });

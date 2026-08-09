@@ -26,6 +26,9 @@ export class WorkerRuntime {
   private currentJobId: string | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private readonly pollIntervalMs: number;
+  private readonly leaseRenewalIntervalMs: number;
+  private readonly activeLeaseTimers: Map<string, NodeJS.Timeout> = new Map();
+  private readonly lostLeases: Set<string> = new Set();
 
   private readonly queueEngine: IQueueEngine;
   private readonly repository: IJobRepository;
@@ -41,6 +44,8 @@ export class WorkerRuntime {
     this.queues = options.queues ?? ['default'];
     this.concurrency = options.concurrency ?? WORKER_DEFAULTS.defaultConcurrency;
     this.pollIntervalMs = options.pollIntervalMs ?? WORKER_DEFAULTS.pollIntervalMs;
+    this.leaseRenewalIntervalMs =
+      options.leaseRenewalIntervalMs ?? WORKER_DEFAULTS.leaseRenewalIntervalMs;
     this.limiter = new ConcurrencyLimiter(this.concurrency);
 
     this.queueEngine = queueEngine;
@@ -103,6 +108,8 @@ export class WorkerRuntime {
       this.pollTimer = null;
     }
 
+    this.clearAllLeaseHeartbeats();
+
     // Wait for active processing slots to clear
     let attempts = 0;
     while (this.limiter.active > 0 && attempts < 50) {
@@ -117,6 +124,55 @@ export class WorkerRuntime {
     prometheusRegistry.setGauge(METRIC_NAMES.WORKER_BUSY, 0, labels);
 
     appLogger.info('Worker Runtime stopped cleanly', { workerId: this.workerId });
+  }
+
+  private startLeaseHeartbeat(jobId: string): void {
+    this.stopLeaseHeartbeat(jobId);
+    this.lostLeases.delete(jobId);
+
+    const timer = setInterval(() => {
+      void (async (): Promise<void> => {
+        try {
+          const renewed = await this.repository.updateJobLease(jobId, this.workerId);
+          if (!renewed) {
+            appLogger.warn('Worker lost lease for running job', {
+              jobId,
+              workerId: this.workerId,
+            });
+            this.lostLeases.add(jobId);
+            this.stopLeaseHeartbeat(jobId);
+          } else {
+            appLogger.debug('Worker renewed lease for running job', {
+              jobId,
+              workerId: this.workerId,
+            });
+          }
+        } catch (err: unknown) {
+          appLogger.error('Error renewing job lease', {
+            jobId,
+            workerId: this.workerId,
+            error: String(err),
+          });
+        }
+      })();
+    }, this.leaseRenewalIntervalMs);
+
+    this.activeLeaseTimers.set(jobId, timer);
+  }
+
+  private stopLeaseHeartbeat(jobId: string): void {
+    const timer = this.activeLeaseTimers.get(jobId);
+    if (timer) {
+      clearInterval(timer);
+      this.activeLeaseTimers.delete(jobId);
+    }
+  }
+
+  private clearAllLeaseHeartbeats(): void {
+    for (const timer of this.activeLeaseTimers.values()) {
+      clearInterval(timer);
+    }
+    this.activeLeaseTimers.clear();
   }
 
   private scheduleNextPoll(delayMs: number): void {
@@ -193,6 +249,9 @@ export class WorkerRuntime {
       startedAt: new Date(),
     });
 
+    // Start background lease renewal heartbeat
+    this.startLeaseHeartbeat(runningJob.id);
+
     // 3. Construct Execution Context
     const context: ExecutionContext = {
       jobId: runningJob.id,
@@ -222,57 +281,74 @@ export class WorkerRuntime {
       'worker.id': this.workerId,
     });
 
-    // 4. Delegate execution to Execution Engine
-    const result = await this.executionEngine.execute(runningJob, context);
+    try {
+      // 4. Delegate execution to Execution Engine
+      const result = await this.executionEngine.execute(runningJob, context);
 
-    // 5. Update PostgreSQL state and acknowledge Redis job
-    if (result.success) {
-      prometheusRegistry.incrementCounter(METRIC_NAMES.JOBS_COMPLETED_TOTAL, 1, {
-        queue: queueName,
-      });
-      prometheusRegistry.recordHistogram(METRIC_NAMES.WORKER_JOB_DURATION_MS, result.durationMs, {
-        queue: queueName,
-        status: 'COMPLETED',
-      });
-      prometheusRegistry.recordHistogram(
-        METRIC_NAMES.JOB_EXECUTION_DURATION_MS,
-        result.durationMs,
-        { queue: queueName, status: 'COMPLETED' },
-      );
+      const wasLeaseLost = this.lostLeases.has(jobId);
+      this.stopLeaseHeartbeat(jobId);
 
-      tracingHelper.endSpan(span, 'OK');
+      if (wasLeaseLost) {
+        appLogger.warn(
+          'Job execution finished but worker lost lease during execution. Skipping PostgreSQL status update.',
+          { jobId, workerId: this.workerId },
+        );
+        await this.queueEngine.ackJob(queueName, jobId).catch(() => {});
+        return;
+      }
 
-      await this.repository.updateStatus(jobId, JobStatus.COMPLETED, {
-        completedAt: new Date(),
-        executionTimeMs: result.durationMs,
-      });
-      await this.queueEngine.ackJob(queueName, jobId);
-      appLogger.info('Job Execution Success Persisted', { jobId, durationMs: result.durationMs });
-    } else {
-      const error = result.error || new Error('Processor execution error');
-      prometheusRegistry.incrementCounter(METRIC_NAMES.JOBS_FAILED_TOTAL, 1, {
-        queue: queueName,
-        failure_type: error.name || 'Error',
-      });
-      prometheusRegistry.recordHistogram(METRIC_NAMES.WORKER_JOB_DURATION_MS, result.durationMs, {
-        queue: queueName,
-        status: 'FAILED',
-      });
-      prometheusRegistry.recordHistogram(
-        METRIC_NAMES.JOB_EXECUTION_DURATION_MS,
-        result.durationMs,
-        { queue: queueName, status: 'FAILED' },
-      );
+      // 5. Update PostgreSQL state and acknowledge Redis job
+      if (result.success) {
+        prometheusRegistry.incrementCounter(METRIC_NAMES.JOBS_COMPLETED_TOTAL, 1, {
+          queue: queueName,
+        });
+        prometheusRegistry.recordHistogram(METRIC_NAMES.WORKER_JOB_DURATION_MS, result.durationMs, {
+          queue: queueName,
+          status: 'COMPLETED',
+        });
+        prometheusRegistry.recordHistogram(
+          METRIC_NAMES.JOB_EXECUTION_DURATION_MS,
+          result.durationMs,
+          { queue: queueName, status: 'COMPLETED' },
+        );
 
-      tracingHelper.recordException(span, error);
-      tracingHelper.endSpan(span, 'ERROR', error.message);
+        tracingHelper.endSpan(span, 'OK');
 
-      await retryEngine.scheduleRetry(runningJob, error);
-      errorLogger.error('Job Execution Failure Handled by Retry Engine', {
-        jobId,
-        durationMs: result.durationMs,
-        error: error.message,
-      });
+        await this.repository.updateStatus(jobId, JobStatus.COMPLETED, {
+          completedAt: new Date(),
+          executionTimeMs: result.durationMs,
+        });
+        await this.queueEngine.ackJob(queueName, jobId);
+        appLogger.info('Job Execution Success Persisted', { jobId, durationMs: result.durationMs });
+      } else {
+        const error = result.error || new Error('Processor execution error');
+        prometheusRegistry.incrementCounter(METRIC_NAMES.JOBS_FAILED_TOTAL, 1, {
+          queue: queueName,
+          failure_type: error.name || 'Error',
+        });
+        prometheusRegistry.recordHistogram(METRIC_NAMES.WORKER_JOB_DURATION_MS, result.durationMs, {
+          queue: queueName,
+          status: 'FAILED',
+        });
+        prometheusRegistry.recordHistogram(
+          METRIC_NAMES.JOB_EXECUTION_DURATION_MS,
+          result.durationMs,
+          { queue: queueName, status: 'FAILED' },
+        );
+
+        tracingHelper.recordException(span, error);
+        tracingHelper.endSpan(span, 'ERROR', error.message);
+
+        await retryEngine.scheduleRetry(runningJob, error);
+        errorLogger.error('Job Execution Failure Handled by Retry Engine', {
+          jobId,
+          durationMs: result.durationMs,
+          error: error.message,
+        });
+      }
+    } finally {
+      this.stopLeaseHeartbeat(jobId);
+      this.lostLeases.delete(jobId);
     }
   }
 }

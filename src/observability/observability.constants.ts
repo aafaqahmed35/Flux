@@ -42,6 +42,16 @@ export const METRIC_NAMES = {
   DB_POOL_IDLE: 'flux_db_pool_idle',
   DB_POOL_WAITING: 'flux_db_pool_waiting',
   REDIS_OPERATION_DURATION_MS: 'flux_redis_operation_duration_ms',
+
+  // Recovery Metrics
+  RECOVERY_SCANS_TOTAL: 'flux_recovery_scans_total',
+  JOBS_RECOVERED_TOTAL: 'flux_jobs_recovered_total',
+  JOBS_RECOVERY_FAILED_TOTAL: 'flux_jobs_recovery_failed_total',
+  JOBS_STALE_TOTAL: 'flux_jobs_stale_total',
+  JOBS_RECONCILED_TOTAL: 'flux_jobs_reconciled_total',
+  REDIS_ORPHANS_REMOVED_TOTAL: 'flux_redis_orphans_removed_total',
+  RECOVERY_DURATION_MS: 'flux_recovery_duration_ms',
+  RECOVERY_CONFLICTS_TOTAL: 'flux_recovery_conflicts_total',
 } as const;
 
 export const DEFAULT_LATENCY_BUCKETS_MS = [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000];

@@ -202,4 +202,204 @@ describe('PostgresJobRepository Integration Tests', () => {
     const fakeId = '00000000-0000-0000-0000-000000000000';
     await expect(repository.cancelJob(fakeId)).rejects.toThrow(JobNotFoundError);
   });
+
+  describe('Recovery Integration Tests', () => {
+    it('should discover stale RUNNING vs fresh RUNNING jobs', async () => {
+      const staleJob = await repository.createJob({
+        name: 'stale-running',
+        queueName: 'recovery.int',
+      });
+      const freshJob = await repository.createJob({
+        name: 'fresh-running',
+        queueName: 'recovery.int',
+      });
+      createdJobIds.push(staleJob.id, freshJob.id);
+
+      await repository.updateStatus(staleJob.id, JobStatus.QUEUED);
+      await repository.updateStatus(staleJob.id, JobStatus.RUNNING, {
+        workerId: 'w-1',
+        lockedAt: new Date(),
+      });
+      await pgPool.query(
+        "UPDATE jobs SET locked_at = NOW() - INTERVAL '60 seconds' WHERE id = $1",
+        [staleJob.id],
+      );
+
+      await repository.updateStatus(freshJob.id, JobStatus.QUEUED);
+      await repository.updateStatus(freshJob.id, JobStatus.RUNNING, {
+        workerId: 'w-2',
+        lockedAt: new Date(),
+      });
+
+      const staleRunning = await repository.findStaleRunningJobs(30000, 100);
+      const staleIds = staleRunning.map((j) => j.id);
+
+      expect(staleIds).toContain(staleJob.id);
+      expect(staleIds).not.toContain(freshJob.id);
+    });
+
+    it('should discover stale CLAIMED vs fresh CLAIMED jobs', async () => {
+      const staleClaimed = await repository.createJob({
+        name: 'stale-claimed',
+        queueName: 'recovery.int',
+      });
+      const freshClaimed = await repository.createJob({
+        name: 'fresh-claimed',
+        queueName: 'recovery.int',
+      });
+      createdJobIds.push(staleClaimed.id, freshClaimed.id);
+
+      await repository.updateStatus(staleClaimed.id, JobStatus.QUEUED);
+      await repository.updateStatus(staleClaimed.id, JobStatus.CLAIMED, {
+        workerId: 'w-1',
+        lockedAt: new Date(),
+      });
+      await pgPool.query(
+        "UPDATE jobs SET locked_at = NOW() - INTERVAL '60 seconds' WHERE id = $1",
+        [staleClaimed.id],
+      );
+
+      await repository.updateStatus(freshClaimed.id, JobStatus.QUEUED);
+      await repository.updateStatus(freshClaimed.id, JobStatus.CLAIMED, {
+        workerId: 'w-2',
+        lockedAt: new Date(),
+      });
+
+      const claimedJobs = await repository.findClaimedJobs(30000, 100);
+      const claimedIds = claimedJobs.map((j) => j.id);
+
+      expect(claimedIds).toContain(staleClaimed.id);
+      expect(claimedIds).not.toContain(freshClaimed.id);
+    });
+
+    it('should discover stale PENDING vs fresh PENDING jobs', async () => {
+      const stalePending = await repository.createJob({
+        name: 'stale-pending',
+        queueName: 'recovery.int',
+      });
+      const freshPending = await repository.createJob({
+        name: 'fresh-pending',
+        queueName: 'recovery.int',
+      });
+      createdJobIds.push(stalePending.id, freshPending.id);
+
+      await pgPool.query(
+        "UPDATE jobs SET created_at = NOW() - INTERVAL '120 seconds' WHERE id = $1",
+        [stalePending.id],
+      );
+
+      const recoverable = await repository.findRecoverablePendingJobs(60000, 100);
+      const recoverableIds = recoverable.map((j) => j.id);
+
+      expect(recoverableIds).toContain(stalePending.id);
+      expect(recoverableIds).not.toContain(freshPending.id);
+    });
+
+    it('should discover due RETRYING jobs and exclude future and NULL next_retry_at jobs', async () => {
+      const dueJob = await repository.createJob({ name: 'due-retry', queueName: 'recovery.int' });
+      const futureJob = await repository.createJob({
+        name: 'future-retry',
+        queueName: 'recovery.int',
+      });
+      const nullRetryJob = await repository.createJob({
+        name: 'null-retry',
+        queueName: 'recovery.int',
+      });
+      createdJobIds.push(dueJob.id, futureJob.id, nullRetryJob.id);
+
+      await repository.updateStatus(dueJob.id, JobStatus.QUEUED);
+      await repository.updateStatus(dueJob.id, JobStatus.RUNNING);
+      await repository.updateRetry(dueJob.id, {
+        retryCount: 1,
+        nextRetryAt: new Date(Date.now() - 10000),
+        errorMessage: 'err',
+      });
+
+      await repository.updateStatus(futureJob.id, JobStatus.QUEUED);
+      await repository.updateStatus(futureJob.id, JobStatus.RUNNING);
+      await repository.updateRetry(futureJob.id, {
+        retryCount: 1,
+        nextRetryAt: new Date(Date.now() + 60000),
+        errorMessage: 'err',
+      });
+
+      await pgPool.query(
+        "UPDATE jobs SET status = 'RETRYING', next_retry_at = NULL WHERE id = $1",
+        [nullRetryJob.id],
+      );
+
+      const retryingJobs = await repository.findRetryingJobs(100);
+      const retryingIds = retryingJobs.map((j) => j.id);
+
+      expect(retryingIds).toContain(dueJob.id);
+      expect(retryingIds).not.toContain(futureJob.id);
+      expect(retryingIds).not.toContain(nullRetryJob.id);
+    });
+
+    it('should perform atomic stale recovery and prevent duplicate recovery', async () => {
+      const job = await repository.createJob({ name: 'atomic-stale', queueName: 'recovery.int' });
+      createdJobIds.push(job.id);
+
+      await repository.updateStatus(job.id, JobStatus.QUEUED);
+      await repository.updateStatus(job.id, JobStatus.RUNNING, {
+        workerId: 'w-stale',
+        lockedAt: new Date(),
+      });
+
+      // Concurrent recovery attempts
+      const [res1, res2] = await Promise.all([
+        repository.recoverStaleJob(job.id, JobStatus.RUNNING, JobStatus.RETRYING, 'Stale timeout'),
+        repository.recoverStaleJob(job.id, JobStatus.RUNNING, JobStatus.RETRYING, 'Stale timeout'),
+      ]);
+
+      // Exactly one process succeeds
+      expect([res1, res2].filter(Boolean).length).toBe(1);
+
+      const recovered = await repository.findById(job.id);
+      expect(recovered?.status).toBe(JobStatus.RETRYING);
+      expect(recovered?.workerId).toBeNull();
+      expect(recovered?.lockedAt).toBeNull();
+    });
+
+    it('should perform atomic pending recovery and prevent duplicate pending recovery', async () => {
+      const job = await repository.createJob({ name: 'atomic-pending', queueName: 'recovery.int' });
+      createdJobIds.push(job.id);
+
+      const [res1, res2] = await Promise.all([
+        repository.recoverPendingJob(job.id),
+        repository.recoverPendingJob(job.id),
+      ]);
+
+      expect([res1, res2].filter(Boolean).length).toBe(1);
+
+      const recovered = await repository.findById(job.id);
+      expect(recovered?.status).toBe(JobStatus.QUEUED);
+    });
+
+    it('should update job lease only for matching worker and RUNNING status', async () => {
+      const job = await repository.createJob({ name: 'lease-test', queueName: 'recovery.int' });
+      createdJobIds.push(job.id);
+
+      await repository.updateStatus(job.id, JobStatus.QUEUED);
+      await repository.updateStatus(job.id, JobStatus.RUNNING, {
+        workerId: 'worker-A',
+        lockedAt: new Date(),
+      });
+
+      // Correct worker renews lease
+      const renewSuccess = await repository.updateJobLease(job.id, 'worker-A');
+      expect(renewSuccess).toBe(true);
+
+      // Wrong worker fails to renew lease
+      const wrongWorkerResult = await repository.updateJobLease(job.id, 'worker-B');
+      expect(wrongWorkerResult).toBe(false);
+
+      // Complete job
+      await repository.updateStatus(job.id, JobStatus.COMPLETED);
+
+      // Non-RUNNING job fails lease renewal even for correct worker
+      const nonRunningResult = await repository.updateJobLease(job.id, 'worker-A');
+      expect(nonRunningResult).toBe(false);
+    });
+  });
 });

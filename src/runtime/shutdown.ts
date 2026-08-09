@@ -5,11 +5,12 @@ import { pgPool } from '../database/postgres.js';
 import { redisClient } from '../redis/redis.js';
 import { workerManager } from '../workers/worker.manager.js';
 import { schedulerRuntime } from '../schedules/scheduler.runtime.js';
+import { recoveryRuntime } from '../recovery/recovery.runtime.js';
 
 let isShuttingDown = false;
 
 export async function gracefulShutdown(
-  processType: 'API' | 'WORKER' | 'SCHEDULER',
+  processType: 'API' | 'WORKER' | 'SCHEDULER' | 'RECOVERY',
   httpServer?: Server,
 ): Promise<void> {
   if (isShuttingDown) {
@@ -47,6 +48,12 @@ export async function gracefulShutdown(
       appLogger.info('Scheduler runtime stopped cleanly');
     }
 
+    if (processType === 'RECOVERY') {
+      appLogger.info('Stopping recovery runtime and releasing leadership lock...');
+      await recoveryRuntime.stop();
+      appLogger.info('Recovery runtime stopped cleanly');
+    }
+
     appLogger.info('Shutting down OpenTelemetry SDK...');
     await openTelemetryManager.shutdown();
 
@@ -71,7 +78,7 @@ export async function gracefulShutdown(
 }
 
 export function setupSignalHandlers(
-  processType: 'API' | 'WORKER' | 'SCHEDULER',
+  processType: 'API' | 'WORKER' | 'SCHEDULER' | 'RECOVERY',
   httpServer?: Server,
 ): void {
   const handler = (signal: string): void => {

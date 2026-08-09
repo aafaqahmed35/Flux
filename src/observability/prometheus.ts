@@ -161,7 +161,31 @@ export class PrometheusRegistry {
         ['command'],
         REDIS_LATENCY_BUCKETS_MS,
       );
-    } catch (err) {
+
+      // Recovery Metrics
+      this.getOrCreateCounter(METRIC_NAMES.RECOVERY_SCANS_TOTAL, 'Total recovery scans executed');
+      this.getOrCreateCounter(METRIC_NAMES.JOBS_RECOVERED_TOTAL, 'Total jobs recovered');
+      this.getOrCreateCounter(
+        METRIC_NAMES.JOBS_RECOVERY_FAILED_TOTAL,
+        'Total job recovery failures',
+      );
+      this.getOrCreateGauge(METRIC_NAMES.JOBS_STALE_TOTAL, 'Current stale jobs count');
+      this.getOrCreateCounter(METRIC_NAMES.JOBS_RECONCILED_TOTAL, 'Total jobs reconciled');
+      this.getOrCreateCounter(
+        METRIC_NAMES.REDIS_ORPHANS_REMOVED_TOTAL,
+        'Total orphan Redis job IDs removed',
+      );
+      this.getOrCreateHistogram(
+        METRIC_NAMES.RECOVERY_DURATION_MS,
+        'Recovery scan execution duration in milliseconds',
+        [],
+        DEFAULT_LATENCY_BUCKETS_MS,
+      );
+      this.getOrCreateCounter(
+        METRIC_NAMES.RECOVERY_CONFLICTS_TOTAL,
+        'Total recovery race conflicts',
+      );
+    } catch (err: unknown) {
       errorLogger.error('Error initializing core Prometheus metrics', { error: String(err) });
     }
   }

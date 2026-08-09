@@ -5,6 +5,7 @@ import { healthRoutes } from './health.routes.js';
 import { jobRouter } from './job.routes.js';
 import retryRouter from './retry.routes.js';
 import { createScheduleRouter } from './schedule.routes.js';
+import { recoveryRouter } from './recovery.routes.js';
 import { metricsController } from '../controllers/metrics.controller.js';
 import { authMiddleware } from '../auth/auth.middleware.js';
 import { requireScope } from '../auth/authorize.middleware.js';
@@ -33,6 +34,7 @@ router.use('/api/v1/jobs', jobRouter);
 router.use('/api/v1/deadletter', deadLetterRouter);
 router.use('/api/v1/retries', retryRouter);
 router.use('/api/v1/schedules', createScheduleRouter());
+router.use('/api/v1/recovery', recoveryRouter);
 
 export const appRouter = router;
 export default router;

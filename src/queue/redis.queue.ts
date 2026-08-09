@@ -286,6 +286,84 @@ export class RedisQueue implements IQueueEngine {
       activeWorkers,
     };
   }
+
+  // Reconciliation & Recovery primitives
+  async containsJob(queueName: string, jobId: string): Promise<boolean> {
+    await this.ensureConnected();
+    const queued = await this.listQueuedJobs(queueName);
+    if (queued.includes(jobId)) return true;
+    const processing = await this.listProcessingJobs(queueName);
+    return processing.includes(jobId);
+  }
+
+  async listProcessingJobs(queueName: string): Promise<string[]> {
+    await this.ensureConnected();
+    const processingKey = QueueKeyFactory.processing(queueName);
+    return this.client.lrange(processingKey, 0, -1);
+  }
+
+  async listQueuedJobs(queueName: string): Promise<string[]> {
+    await this.ensureConnected();
+    const queueKey = QueueKeyFactory.queue(queueName);
+    return this.client.lrange(queueKey, 0, -1);
+  }
+
+  async listAllQueueJobIds(queueName: string): Promise<string[]> {
+    await this.ensureConnected();
+    const [queued, processing] = await Promise.all([
+      this.listQueuedJobs(queueName),
+      this.listProcessingJobs(queueName),
+    ]);
+    const idSet = new Set([...queued, ...processing]);
+    return Array.from(idSet);
+  }
+
+  async removeProcessingJob(queueName: string, jobId: string): Promise<boolean> {
+    await this.ensureConnected();
+    const processingKey = QueueKeyFactory.processing(queueName);
+    const count = await this.client.lrem(processingKey, 0, jobId);
+    return count > 0;
+  }
+
+  async removeOrphanJob(queueName: string, jobId: string): Promise<boolean> {
+    await this.ensureConnected();
+    const queueKey = QueueKeyFactory.queue(queueName);
+    const processingKey = QueueKeyFactory.processing(queueName);
+    const scheduledKey = QueueKeyFactory.scheduled();
+    const dlqKey = QueueKeyFactory.deadLetter();
+
+    const pipeline = this.client.pipeline();
+    pipeline.lrem(queueKey, 0, jobId);
+    pipeline.lrem(processingKey, 0, jobId);
+    pipeline.zrem(scheduledKey, jobId);
+    pipeline.lrem(dlqKey, 0, jobId);
+
+    const results = await pipeline.exec();
+    let removedAny = false;
+    if (results) {
+      for (const [err, res] of results) {
+        if (!err && typeof res === 'number' && res > 0) {
+          removedAny = true;
+        }
+      }
+    }
+    return removedAny;
+  }
+
+  async rebuildQueue(queueName: string, jobIds: string[]): Promise<void> {
+    await this.ensureConnected();
+    const queueKey = QueueKeyFactory.queue(queueName);
+    const setKey = QueueKeyFactory.queuesSet();
+
+    const pipeline = this.client.pipeline();
+    pipeline.del(queueKey);
+    if (jobIds.length > 0) {
+      pipeline.rpush(queueKey, ...jobIds);
+      pipeline.sadd(setKey, queueName);
+    }
+    await pipeline.exec();
+    appLogger.info('Queue rebuilt in Redis', { queueName, count: jobIds.length });
+  }
 }
 
 export const redisQueue = new RedisQueue();

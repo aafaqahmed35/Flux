@@ -92,6 +92,34 @@ services:
       flux-redis:
         condition: service_healthy
 
+  flux-recovery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flux-recovery
+    restart: unless-stopped
+    command: npm run start:recovery
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=info
+      - POSTGRES_HOST=flux-postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-flux_db}
+      - POSTGRES_USER=${POSTGRES_USER:-flux_user}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-flux_password}
+      - REDIS_HOST=flux-redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - OTEL_SERVICE_NAME=flux-recovery
+    networks:
+      - flux-network
+    depends_on:
+      flux-postgres:
+        condition: service_healthy
+      flux-redis:
+        condition: service_healthy
+
+
   flux-postgres:
     image: postgres:16-alpine
     container_name: flux-postgres
