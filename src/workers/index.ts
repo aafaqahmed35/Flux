@@ -1,5 +1,6 @@
 export * from './processor.interface.js';
 export * from './processor.registry.js';
+export * from './default.processor.js';
 export * from './concurrency.limiter.js';
 export * from './worker.types.js';
 export * from './worker.constants.js';

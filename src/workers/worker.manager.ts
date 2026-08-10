@@ -5,6 +5,8 @@ import { WORKER_DEFAULTS } from './worker.constants.js';
 import { WorkerRegistry, workerRegistry as defaultWorkerRegistry } from './worker.registry.js';
 import { WorkerRuntime } from './worker.runtime.js';
 import { WorkerInfo, WorkerOptions } from './worker.types.js';
+import { defaultJobProcessor } from './default.processor.js';
+import { processorRegistry as defaultProcessorRegistry } from './processor.registry.js';
 
 export class WorkerManager {
   public readonly runtime: WorkerRuntime;
@@ -32,6 +34,11 @@ export class WorkerManager {
       return;
     }
     this.isStarted = true;
+
+    // Ensure default queue processor is registered out of the box
+    if (!defaultProcessorRegistry.getProcessor('default')) {
+      defaultProcessorRegistry.registerProcessor('default', defaultJobProcessor);
+    }
 
     // 1. Register worker metadata in Redis
     await this.workerRegistry.registerWorker(this.workerInfo);

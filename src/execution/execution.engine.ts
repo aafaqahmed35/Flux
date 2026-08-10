@@ -39,8 +39,12 @@ export class ExecutionEngine implements IExecutionEngine {
     });
 
     try {
-      const output = await processor.execute(job, context);
+      const output =
+        typeof processor === 'function'
+          ? await processor(job, context)
+          : await processor.execute(job, context);
       const durationMs = Date.now() - start;
+
       appLogger.info('Job Execution Completed', {
         jobId: job.id,
         name: job.name,
