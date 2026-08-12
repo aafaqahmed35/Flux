@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Flux — Operational Control Plane</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/dashboard/assets/brand/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/dashboard/assets/brand/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/dashboard/assets/brand/apple-touch-icon.png">
   <link rel="icon" type="image/png" href="/dashboard/assets/brand/favicon.png">
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -17,7 +19,7 @@
         <img src="/dashboard/assets/brand/flux-logo.png" alt="Flux Logo" class="auth-brand-logo">
         <p class="text-muted" style="font-size: 0.82rem;">Sign in to access the Distributed Job Control Plane</p>
       </div>
-      <div id="auth-error" class="error-msg hidden"></div>
+      <div id="auth-error" class="error-msg hidden" style="color: var(--status-red-text); font-size: 12px; margin-bottom: 12px; text-align: center;"></div>
       <form id="login-form">
         <div class="form-group">
           <label for="email">Operator Email</label>
@@ -27,14 +29,14 @@
           <label for="password">Password</label>
           <input type="password" id="password" value="FluxDev123!" required autocomplete="current-password">
         </div>
-        <button type="submit" class="btn btn-primary btn-block py-2">Sign In to Dashboard</button>
+        <button type="submit" class="btn btn-primary btn-block py-2" style="width: 100%;">Sign In to Dashboard</button>
       </form>
     </div>
   </div>
 
   <!-- APP SHELL LAYOUT -->
   <div class="app-layout">
-    <!-- SIDEBAR NAVIGATION -->
+    <!-- SIDEBAR NAVIGATION (DARK OPERATIONAL SHELL) -->
     <aside class="sidebar">
       <div class="sidebar-header">
         <div class="brand">
@@ -84,9 +86,9 @@
       </div>
     </aside>
 
-    <!-- MAIN WRAPPER -->
+    <!-- MAIN WORKSPACE WRAPPER -->
     <div class="main-wrapper">
-      <!-- TOP BAR -->
+      <!-- TOP BAR HEADER -->
       <header class="top-bar">
         <div class="breadcrumb">
           <span class="crumb-app">Flux</span>
@@ -107,36 +109,79 @@
         </div>
       </header>
 
-      <!-- MAIN CONTENT AREA -->
+      <!-- MAIN CONTENT WORKSPACE -->
       <main class="main-content">
         <!-- 1. OVERVIEW VIEW PANEL -->
         <section id="view-overview" class="view-panel active">
-          <!-- COMPACT OPERATIONAL METRICS STRIP -->
+          <!-- TOP 4 OPERATIONAL KPI CARDS -->
           <div class="metrics-grid-4 mb-4">
-            <div class="stat-card border-purple">
-              <div class="stat-label">Queue Depth</div>
-              <div class="stat-value text-purple" id="metric-queue-depth">0</div>
-              <div class="stat-subtext">Active enqueued messages</div>
+            <!-- QUEUE DEPTH -->
+            <div class="stat-card">
+              <div class="stat-card-header">
+                <div class="stat-icon-box purple">🔀</div>
+                <div class="stat-label">Queue Depth</div>
+              </div>
+              <div class="stat-value-row">
+                <div>
+                  <div class="stat-value text-purple" id="metric-queue-depth">0</div>
+                  <div class="stat-subtext">In transport buffer</div>
+                </div>
+                <div class="stat-sparkline" id="sparkline-queue-depth"></div>
+              </div>
+              <div class="stat-comparison" id="comp-queue-depth">— 0% vs 1m ago</div>
             </div>
-            <div class="stat-card border-blue">
-              <div class="stat-label">Active Workers</div>
-              <div class="stat-value text-blue" id="metric-active-workers">0</div>
-              <div class="stat-subtext">Registered concurrency nodes</div>
+
+            <!-- ACTIVE WORKERS -->
+            <div class="stat-card">
+              <div class="stat-card-header">
+                <div class="stat-icon-box blue">⚙️</div>
+                <div class="stat-label">Active Workers</div>
+              </div>
+              <div class="stat-value-row">
+                <div>
+                  <div class="stat-value text-blue" id="metric-active-workers">0</div>
+                  <div class="stat-subtext">Registered concurrency nodes</div>
+                </div>
+                <div class="stat-sparkline" id="sparkline-active-workers"></div>
+              </div>
+              <div class="stat-comparison" id="comp-active-workers">— 0% vs 1m ago</div>
             </div>
-            <div class="stat-card border-green">
-              <div class="stat-label">Running Jobs</div>
-              <div class="stat-value text-green" id="metric-running-jobs">0</div>
-              <div class="stat-subtext">Active processing execution</div>
+
+            <!-- RUNNING JOBS -->
+            <div class="stat-card">
+              <div class="stat-card-header">
+                <div class="stat-icon-box green">▶</div>
+                <div class="stat-label">Running Jobs</div>
+              </div>
+              <div class="stat-value-row">
+                <div>
+                  <div class="stat-value text-green" id="metric-running-jobs">0</div>
+                  <div class="stat-subtext">Active processing execution</div>
+                </div>
+                <div class="stat-sparkline" id="sparkline-running-jobs"></div>
+              </div>
+              <div class="stat-comparison" id="comp-running-jobs">— 0% vs 1m ago</div>
             </div>
-            <div class="stat-card border-orange">
-              <div class="stat-label">DLQ Failures</div>
-              <div class="stat-value text-orange" id="metric-dlq-count">0</div>
-              <div class="stat-subtext">Exhausted retry dead letters</div>
+
+            <!-- DLQ FAILURES -->
+            <div class="stat-card">
+              <div class="stat-card-header">
+                <div class="stat-icon-box red">⚠</div>
+                <div class="stat-label">DLQ Failures</div>
+              </div>
+              <div class="stat-value-row">
+                <div>
+                  <div class="stat-value text-orange" id="metric-dlq-count">0</div>
+                  <div class="stat-subtext">Exhausted retry dead letters</div>
+                </div>
+                <div class="stat-sparkline" id="sparkline-dlq-count"></div>
+              </div>
+              <div class="stat-comparison" id="comp-dlq-count">— 0% vs 1m ago</div>
             </div>
           </div>
 
           <!-- OPERATIONAL COLUMNS -->
-          <div class="metrics-grid-2">
+          <div class="metrics-grid-2 align-start mb-4">
             <!-- RECENT QUEUE ACTIVITY -->
             <div class="panel-card mb-0">
               <div class="panel-header flex-between">
@@ -150,16 +195,20 @@
                 <table class="data-table">
                   <thead>
                     <tr>
-                      <th>Job Name</th>
+                      <th>Job Name / ID</th>
                       <th>Status</th>
                       <th>Queue</th>
                       <th>Duration</th>
+                      <th style="white-space: nowrap; min-width: 135px;">Time</th>
                     </tr>
                   </thead>
                   <tbody id="overview-jobs-body">
-                    <tr><td colspan="4" class="text-center py-4 text-muted">Loading live activity...</td></tr>
+                    <tr><td colspan="5" class="text-center py-4 text-muted">Loading live activity...</td></tr>
                   </tbody>
                 </table>
+              </div>
+              <div class="mt-3 pt-2 border-t flex-between">
+                <span class="stat-subtext flex-center gap-2"><span class="pulse-dot green"></span> Auto-refreshing every 5s</span>
               </div>
             </div>
 
@@ -170,38 +219,83 @@
                   <h3 style="font-size: 1rem; font-weight: 700;">Recovery & Reconciliation Engine</h3>
                   <p class="stat-subtext">Automated crash recovery & DB reconciliation</p>
                 </div>
-                <button id="overview-recovery-btn" class="btn btn-secondary btn-xs">Trigger Scan</button>
+                <button id="overview-recovery-btn" class="btn btn-secondary btn-xs">⚡ Run Manual Scan</button>
               </div>
-              <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-                <div class="mini-card stat-card border-green">
+              <div style="display: flex; flex-direction: column; gap: 1rem;">
+                <div style="background: var(--bg-subtle); padding: 14px; border-radius: 8px; border: 1px solid var(--border-color);">
                   <div class="flex-between">
                     <span class="stat-label">Leader Lock Status</span>
                     <span class="badge badge-green" id="overview-recovery-lock">ACTIVE LEADER</span>
                   </div>
+                  <div class="stat-value text-green mt-1" style="font-size: 1.25rem;" id="overview-recovery-status-text">STANDBY</div>
                   <div class="stat-subtext mt-1" id="overview-recovery-lease">Lease expires in 12s</div>
-                </div>
-                <div class="metrics-grid-2">
-                  <div class="mini-card stat-card border-blue">
-                    <div class="stat-label">Stale Claims Recovered</div>
-                    <div class="stat-value" style="font-size: 1.15rem;" id="overview-recovered-stale">0</div>
+                  <div class="mt-2" style="background: #e2e8f0; height: 6px; border-radius: 3px; overflow: hidden;">
+                    <div id="overview-renewal-bar" style="background: linear-gradient(90deg, #6366f1, #8b5cf6); width: 85%; height: 100%; transition: width 0.3s ease;"></div>
                   </div>
-                  <div class="mini-card stat-card border-cyan">
+                </div>
+
+                <div class="metrics-grid-2">
+                  <div style="background: var(--bg-subtle); padding: 12px; border-radius: 8px; border: 1px solid var(--border-color);">
+                    <div class="stat-label">Stale Claims Recovered</div>
+                    <div class="stat-value text-purple mt-1" style="font-size: 1.25rem;" id="overview-recovered-stale">0</div>
+                  </div>
+                  <div style="background: var(--bg-subtle); padding: 12px; border-radius: 8px; border: 1px solid var(--border-color);">
                     <div class="stat-label">Reconciled Redis Jobs</div>
-                    <div class="stat-value" style="font-size: 1.15rem;" id="overview-reconciled-redis">0</div>
+                    <div class="stat-value text-blue mt-1" style="font-size: 1.25rem;" id="overview-reconciled-redis">0</div>
                   </div>
                 </div>
               </div>
             </div>
           </div>
+
+          <!-- SYSTEM QUICK HEALTH PANEL MATCHING MOCKUP -->
+          <div class="panel-card mb-0">
+            <div class="panel-header mb-3">
+              <h3 style="font-size: 0.95rem; font-weight: 700;">System Quick Health</h3>
+            </div>
+            <div class="metrics-grid-4" id="system-quick-health-container">
+              <div style="background: var(--bg-subtle); padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border-color);">
+                <div class="flex-between mb-1">
+                  <span style="font-size: 12px; font-weight: 600;">🐘 PostgreSQL</span>
+                  <span class="badge badge-green">Healthy</span>
+                </div>
+                <div style="font-size: 11.5px; color: var(--text-muted);" id="quick-health-db">0 active • 20 idle</div>
+              </div>
+
+              <div style="background: var(--bg-subtle); padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border-color);">
+                <div class="flex-between mb-1">
+                  <span style="font-size: 12px; font-weight: 600;">🔴 Redis</span>
+                  <span class="badge badge-green">Healthy</span>
+                </div>
+                <div style="font-size: 11.5px; color: var(--text-muted);" id="quick-health-redis">4 clients • 1.66 MB</div>
+              </div>
+
+              <div style="background: var(--bg-subtle); padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border-color);">
+                <div class="flex-between mb-1">
+                  <span style="font-size: 12px; font-weight: 600;">⚙ Workers</span>
+                  <span class="badge badge-blue">1 online</span>
+                </div>
+                <div style="font-size: 11.5px; color: var(--text-muted);" id="quick-health-workers">1 active worker instance</div>
+              </div>
+
+              <div style="background: var(--bg-subtle); padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border-color);">
+                <div class="flex-between mb-1">
+                  <span style="font-size: 12px; font-weight: 600;">⏰ Scheduler</span>
+                  <span class="badge badge-green">Healthy</span>
+                </div>
+                <div style="font-size: 11.5px; color: var(--text-muted);">Cron engine standby</div>
+              </div>
+            </div>
+          </div>
         </section>
 
-        <!-- 2. FLOW VIEW HERO SCREEN ⭐ -->
+        <!-- 2. FLOW VIEW HERO SCREEN -->
         <section id="view-flow" class="view-panel">
           <div class="flow-container">
             <div class="flow-header-bar">
               <div>
                 <h2>Distributed Pipeline Architecture</h2>
-                <p>Real-time topology & execution streaming state</p>
+                <p class="stat-subtext">Real-time topology & execution streaming state</p>
               </div>
               <div class="flow-legend">
                 <div class="legend-item"><span class="pulse-dot green"></span> Healthy Node</div>
@@ -225,7 +319,6 @@
                 </div>
 
                 <div class="flow-connector">
-                  <div class="stream-line"></div>
                   <div class="packet-particle"></div>
                 </div>
 
@@ -243,7 +336,6 @@
                 </div>
 
                 <div class="flow-connector">
-                  <div class="stream-line"></div>
                   <div class="packet-particle" style="animation-delay: 0.6s;"></div>
                 </div>
 
@@ -261,7 +353,6 @@
                 </div>
 
                 <div class="flow-connector">
-                  <div class="stream-line"></div>
                   <div class="packet-particle" style="animation-delay: 1.2s;"></div>
                 </div>
 
@@ -287,9 +378,9 @@
           <div class="panel-card mb-4">
             <div class="flex-between flex-wrap gap-3">
               <div class="flex-center gap-3">
-                <input type="text" id="job-search-input" class="search-input" placeholder="Search by Job Name or ID...">
+                <input type="text" id="job-search-input" class="search-input" style="width: 260px;" placeholder="Search by Job Name or ID...">
                 <div class="flex-center gap-2">
-                  <span class="filter-label">Status:</span>
+                  <span class="filter-label" style="font-size: 12px; font-weight: 600; color: var(--text-muted);">Status:</span>
                   <select id="job-status-filter" class="form-select-sm">
                     <option value="">ALL STATUSES</option>
                     <option value="QUEUED">QUEUED</option>
@@ -304,7 +395,7 @@
               </div>
 
               <div class="flex-center gap-2">
-                <span class="filter-label">Page Size:</span>
+                <span class="filter-label" style="font-size: 12px; font-weight: 600; color: var(--text-muted);">Page Size:</span>
                 <select id="job-limit-select" class="form-select-sm">
                   <option value="20">20</option>
                   <option value="50">50</option>
@@ -422,7 +513,7 @@
       <form id="enqueue-job-form">
         <div class="form-group">
           <label for="enqueue-name">Job Name</label>
-          <input type="text" id="enqueue-name" placeholder="e.g. Process Monthly Statements" required>
+          <input type="text" id="enqueue-name" placeholder="e.g. Portfolio Acceptance Test" required>
         </div>
         <div class="metrics-grid-2">
           <div class="form-group">
@@ -441,7 +532,7 @@
         </div>
         <div class="form-group">
           <label for="enqueue-payload">JSON Payload</label>
-          <textarea id="enqueue-payload" rows="4" style="font-family: var(--font-mono); font-size: 0.8rem;">{"batch": 100, "type": "invoice"}</textarea>
+          <textarea id="enqueue-payload" rows="4" style="font-family: var(--font-mono); font-size: 0.8rem;">{"source": "portfolio", "test": true, "timestamp": "acceptance"}</textarea>
         </div>
         <div class="flex-between mt-3 pt-3 border-t">
           <button type="button" class="btn btn-secondary" id="cancel-enqueue-btn">Cancel</button>
@@ -451,7 +542,7 @@
     </div>
   </div>
 
-  <!-- JOB DETAILS DEEP INSPECTION MODAL (PHASE 2 FIX) -->
+  <!-- JOB DETAILS DEEP INSPECTION MODAL -->
   <div id="job-detail-modal" class="modal-overlay hidden">
     <div class="modal-card modal-lg">
       <div class="flex-between modal-header">
